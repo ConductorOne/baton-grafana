@@ -6,10 +6,17 @@ import (
 )
 
 var (
+	accessTokenField = field.StringField(
+		"token",
+		field.WithDescription("The GitHub access token used to connect to the GitHub API."),
+		field.WithRequired(true),
+	)
 	// ConfigurationFields defines the external configuration required for the
 	// connector to run. Note: these fields can be marked as optional or
 	// required.
-	ConfigurationFields = []field.SchemaField{}
+	ConfigurationFields = []field.SchemaField{
+		accessTokenField,
+	}
 
 	// FieldRelationships defines relationships between the fields listed in
 	// ConfigurationFields that can be automatically validated. For example, a
