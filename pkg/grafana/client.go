@@ -16,11 +16,9 @@ const (
 	Protocol   = "http"
 	Port       = "3000"
 
-	CurrentUserPath = "api/user"
-
-	UserOrgsPath = "/api/user/orgs"
-
-	UsersInOrgPath = "/api/orgs/%s/users"
+	ListUsersPath      = "/api/users"
+	ListOrgsPath       = "/api/orgs"
+	ListUsersInOrgPath = "/api/orgs/%s/users"
 )
 
 type CredentialsReq struct {
@@ -103,14 +101,14 @@ func (c *Client) composeURL(endpoint string, params ...interface{}) *url.URL {
 }
 
 // ListOrganizations return organizations for the current user.
-func (c *Client) ListOrganizations(ctx context.Context, pVars *PaginationVars) ([]Organization, uint, error) {
+func (c *Client) ListOrganizations(ctx context.Context, pVars *PaginationVars) ([]Organization, uint64, error) {
 	var organizationsResponse []Organization
-	var nextPage uint
+	var nextPage uint64
 
 	err := c.doRequest(
 		ctx,
 		http.MethodGet,
-		c.composeURL(UserOrgsPath),
+		c.composeURL(ListOrgsPath),
 		&organizationsResponse,
 		nil,
 		pVars,
@@ -120,35 +118,38 @@ func (c *Client) ListOrganizations(ctx context.Context, pVars *PaginationVars) (
 	}
 
 	// Grafana does not provide "nextPage", so we check if we got fewer results than requested
-	if uint(len(organizationsResponse)) == pVars.Size {
+	if uint64(len(organizationsResponse)) == pVars.Size {
 		nextPage = pVars.Page + 1
 	}
 
 	return organizationsResponse, nextPage, nil //
 }
 
-// ListOrganizations fetches all organizations in Grafana.
-// func (c *Client) ListOrganizations(ctx context.Context, pagination PaginationVars) ([]User, error) {
-// 	var response ListResponse[User]
-// 	err := c.doRequest(ctx, http.MethodGet, c.composeURL("/api/orgs", c.currentUser), &response, nil, &pagination)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	return response.Items, nil
-// }
+// ListUsersByOrg fetches all users in a given Grafana organization.
+func (c *Client) ListUsersByOrg(ctx context.Context, orgID string) ([]UserByOrgResponse, error) {
+	var usersByOrgResponse []UserByOrgResponse
+
+	// Make the request without pagination as the endpoint does not support it
+	err := c.doRequest(ctx, http.MethodGet, c.composeURL(ListUsersInOrgPath, orgID), &usersByOrgResponse, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return usersByOrgResponse, nil
+}
 
 // ListUsers fetches all users in Grafana.
-func (c *Client) ListUsers(ctx context.Context, orgSlug string, pVars *PaginationVars) ([]User, uint, error) {
+func (c *Client) ListUsers(ctx context.Context, pVars *PaginationVars) ([]User, uint64, error) {
 	var usersResponse []User
-	var nextPage uint
+	var nextPage uint64
 
-	err := c.doRequest(ctx, http.MethodGet, c.composeURL(UsersInOrgPath, orgSlug), &usersResponse, nil, pVars)
+	err := c.doRequest(ctx, http.MethodGet, c.composeURL(ListUsersPath), &usersResponse, nil, pVars)
 	if err != nil {
 		return nil, 0, err
 	}
 
 	// Grafana does not provide "nextPage", so we check if we got fewer results than requested
-	if uint(len(usersResponse)) == pVars.Size {
+	if uint64(len(usersResponse)) == pVars.Size {
 		nextPage = pVars.Page + 1
 	}
 
@@ -211,6 +212,8 @@ func (c *Client) doRequest(
 	data interface{},
 	paginationVars *PaginationVars,
 ) error {
+	l := ctxzap.Extract(ctx)
+	l.Info(fmt.Sprintf("DO REQUEST: urlurlAddress: %s <|||||", urlAddress))
 	var err error
 
 	reqOptions := []uhttp.RequestOption{
@@ -248,15 +251,17 @@ func (c *Client) doRequest(
 	return nil
 }
 
-func parsePageFromURL(urlPayload string) string {
-	if urlPayload == "" {
-		return ""
+// Convert UserByOrg to User
+func (ubo UserByOrgResponse) ToUser() User {
+	return User{
+		ID:            ubo.ID, // Maps userId -> id
+		Name:          ubo.Name,
+		Login:         ubo.Login,
+		Email:         ubo.Email,
+		AvatarUrl:     ubo.AvatarUrl,
+		IsDisabled:    ubo.IsDisabled,
+		LastSeenAt:    ubo.LastSeenAt,
+		LastSeenAtAge: ubo.LastSeenAtAge,
+		AuthLabels:    ubo.AuthLabels,
 	}
-
-	u, err := url.Parse(urlPayload)
-	if err != nil {
-		return ""
-	}
-
-	return u.Query().Get("page")
 }

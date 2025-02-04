@@ -3,13 +3,13 @@ package connector
 import (
 	"context"
 	"fmt"
+	"strconv"
 
 	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 )
 
 // userResourceType represents the user entity in Grafana.
@@ -24,17 +24,22 @@ func (u *userResourceType) ResourceType(ctx context.Context) *v2.ResourceType {
 }
 
 // userResource creates a Baton resource for a Grafana user.
-func userResource(ctx context.Context, user *grafana.User, parentId *v2.ResourceId) (*v2.Resource, error) {
+func userResource(ctx context.Context, user *grafana.User) (*v2.Resource, error) {
 	profile := map[string]interface{}{
-		"login":    user.Login,
-		"user_id":  user.ID,
-		"email":    user.Email,
-		"is_admin": user.Role == roleAdmin,
+		"full_name": user.Name,
+		"login":     user.Login,
+		"user_id":   user.ID,
+		"email":     user.Email,
+	}
+
+	status := v2.UserTrait_Status_STATUS_ENABLED
+	if user.IsDisabled {
+		status = v2.UserTrait_Status_STATUS_DISABLED
 	}
 
 	userTraitOptions := []rs.UserTraitOption{
 		rs.WithUserProfile(profile),
-		rs.WithStatus(v2.UserTrait_Status_STATUS_ENABLED),
+		rs.WithStatus(status),
 		rs.WithEmail(user.Email, true),
 	}
 
@@ -43,7 +48,6 @@ func userResource(ctx context.Context, user *grafana.User, parentId *v2.Resource
 		resourceTypeUser,
 		user.ID,
 		userTraitOptions,
-		rs.WithParentResourceID(parentId),
 	)
 
 	if err != nil {
@@ -53,49 +57,47 @@ func userResource(ctx context.Context, user *grafana.User, parentId *v2.Resource
 	return resource, nil
 }
 
-func (u *userResourceType) List(ctx context.Context, parentId *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
-	l := ctxzap.Extract(ctx)
-	l.Info(fmt.Sprintf("LISTING USERS: parentID: %s --- size: %d token: --- %s", parentId, pToken.Size, pToken.Token))
-
-	if parentId == nil {
-		return nil, "", nil, nil
-	}
-
+// List fetches all users in Grafana.
+func (u *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
+	// Parse pagination token
 	bag, page, err := parsePageToken(pToken.Token, &v2.ResourceId{ResourceType: resourceTypeUser.Id})
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, fmt.Errorf("failed to parse page token: %w", err)
 	}
-
-	// l.Info(fmt.Sprintf("LISTING USERS: Page: %d  --- bag: %v", page, bag))
 
 	paginationOpts := grafana.PaginationVars{
 		Size: ResourcesPageSize,
-		Page: uint(page),
+		Page: page,
 	}
 
-	users, nextPage, err := u.client.ListUsers(ctx, parentId.Resource, &paginationOpts)
+	// Fetch users from Grafana
+	users, numNextPage, err := u.client.ListUsers(ctx, &paginationOpts)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, fmt.Errorf("grafana-connector: failed to list users: %w", err)
 	}
 
-	next, err := bag.NextToken(fmt.Sprintf("%d", nextPage))
+	// Generate next page token
+	var pageToken string
+	if numNextPage > 0 {
+		pageToken = strconv.FormatUint(numNextPage, 10)
+	}
+
+	next, err := bag.NextToken(pageToken)
 	if err != nil {
-		return nil, "", nil, err
+		return nil, "", nil, fmt.Errorf("failed to generate next token: %w", err)
 	}
 
-	var rv []*v2.Resource
+	// Convert users to resources
+	resources := make([]*v2.Resource, 0, len(users))
 	for _, user := range users {
-		userCopy := user
-
-		ur, err := userResource(ctx, &userCopy, parentId)
+		ur, err := userResource(ctx, &user)
 		if err != nil {
-			return nil, "", nil, err
+			return nil, "", nil, fmt.Errorf("failed to create resource for user %s: %w", user.Email, err)
 		}
-
-		rv = append(rv, ur)
+		resources = append(resources, ur)
 	}
 
-	return rv, next, nil, nil
+	return resources, next, nil, nil
 }
 
 // Entitlements returns an empty list for users.

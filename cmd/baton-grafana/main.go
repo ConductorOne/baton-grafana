@@ -12,7 +12,6 @@ import (
 	"github.com/spf13/viper"
 	"go.uber.org/zap"
 
-	"github.com/conductorone/baton-grafana/pkg/config"
 	"github.com/conductorone/baton-grafana/pkg/connector"
 )
 
@@ -21,7 +20,7 @@ var version = "dev"
 func main() {
 	ctx := context.Background()
 
-	_, cmd, err := configschema.DefineConfiguration(ctx, "baton-grafana", getConnector, config.Configuration)
+	_, cmd, err := configschema.DefineConfiguration(ctx, "baton-grafana", getConnector, cfg)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
@@ -39,10 +38,10 @@ func main() {
 func getConnector(ctx context.Context, v *viper.Viper) (types.ConnectorServer, error) {
 	l := ctxzap.Extract(ctx)
 
-	username := v.GetString(config.Username.FieldName)
-	accessToken := v.GetString(config.AccessToken.FieldName)
-	orgs := v.GetStringSlice(config.Orgs.FieldName)
-	password := v.GetString(config.Password.FieldName)
+	accessToken := v.GetString(AccessToken.FieldName)
+	username := v.GetString(Username.FieldName)
+	password := v.GetString(Password.FieldName)
+	orgs := v.GetStringSlice(Orgs.FieldName)
 
 	cb, err := connector.New(ctx, username, accessToken, password, orgs)
 	if err != nil {

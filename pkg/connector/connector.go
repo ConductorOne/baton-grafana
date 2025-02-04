@@ -36,19 +36,18 @@ func (g *Grafana) Asset(ctx context.Context, asset *v2.AssetRef) (string, io.Rea
 func (g *Grafana) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error) {
 	return &v2.ConnectorMetadata{
 		DisplayName: "Grafana",
-		Description: "Connector syncing Grafana organizations, dashboards, teams, and users to Baton",
+		Description: "Connector syncing Grafana organizations and users to Baton",
 	}, nil
 }
 
 // Validate ensures the connector is properly configured and has valid API credentials.
 func (g *Grafana) Validate(ctx context.Context) (annotations.Annotations, error) {
-
 	paginationOpts := grafana.PaginationVars{
-		Size: ResourcesPageSize,
+		Size: 1,
 		Page: 1,
 	}
 
-	// get the scope of used credentials
+	// Get the scope of used credentials
 	_, _, err := g.client.ListOrganizations(ctx, &paginationOpts)
 	if err != nil {
 		return nil, fmt.Errorf("grafana-connector: validate: failed to list organizations: %w", err)

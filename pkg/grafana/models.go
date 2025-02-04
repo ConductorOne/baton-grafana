@@ -21,45 +21,40 @@ type Client struct {
 
 // PaginationVars holds pagination parameters for API requests.
 type PaginationVars struct {
-	Size uint
-	Page uint
-}
-
-// ListResponse is a generic type for handling paginated responses.
-type ListResponse[T any] struct {
-	Items []T `json:"items"`
-}
-
-// User represents a Grafana user.
-type User struct {
-	ID                 int    `json:"userId"`
-	OrgId              int    `json:"orgId"`
-	Email              string `json:"email"`
-	Name               string `json:"name"`
-	AvatarUrl          string `json:"avatarUrl"`
-	Login              string `json:"login"`
-	Role               string `json:"role"`
-	LastSeenAt         string `json:"lastSeenAt"`
-	LastSeenAtAge      string `json:"lastSeenAtAge"`
-	IsDisabled         bool   `json:"isDisabled"`
-	AuthLabels         string `json:"authLabels"`
-	IsExternallySynced bool   `json:"isExternallySynced"`
-}
-
-// Dashboard represents a Grafana dashboard.
-type Dashboard struct {
-	ID    int    `json:"id"`
-	Title string `json:"title"`
-	UID   string `json:"uid"`
-	URL   string `json:"url"`
-}
-
-type BaseResource struct {
-	Id string `json:"id"`
+	Size uint64
+	Page uint64
 }
 
 type Organization struct {
-	ID   int    `json:"orgId"`
+	ID   int    `json:"id"`
 	Name string `json:"name"`
-	Role string `json:"role"`
+}
+
+type User struct {
+	ID            int      `json:"id"`
+	UID           string   `json:"uid"`
+	Name          string   `json:"name"`
+	Login         string   `json:"login"`
+	Email         string   `json:"email"`
+	AvatarUrl     string   `json:"avatarUrl"`
+	IsAdmin       bool     `json:"isAdmin"`
+	IsDisabled    bool     `json:"isDisabled"`
+	LastSeenAt    string   `json:"lastSeenAt"`
+	LastSeenAtAge string   `json:"lastSeenAtAge"`
+	AuthLabels    []string `json:"authLabels"`
+}
+
+type UserByOrgResponse struct {
+	ID                 int      `json:"userId"`
+	OrgId              int      `json:"orgId"`
+	Email              string   `json:"email"`
+	Name               string   `json:"name"`
+	AvatarUrl          string   `json:"avatarUrl"`
+	Login              string   `json:"login"`
+	Role               string   `json:"role"`
+	LastSeenAt         string   `json:"lastSeenAt"`
+	LastSeenAtAge      string   `json:"lastSeenAtAge"`
+	IsDisabled         bool     `json:"isDisabled"`
+	AuthLabels         []string `json:"authLabels"`
+	IsExternallySynced bool     `json:"isExternallySynced"`
 }

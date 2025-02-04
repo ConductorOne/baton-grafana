@@ -1,7 +1,8 @@
 package connector
 
 import (
-	"strings"
+	"fmt"
+	"strconv"
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
@@ -10,7 +11,7 @@ import (
 	"golang.org/x/text/language"
 )
 
-const ResourcesPageSize uint = 50
+const ResourcesPageSize uint64 = 50
 
 func titleCase(s string) string {
 	titleCaser := cases.Title(language.English)
@@ -32,13 +33,14 @@ func parsePageToken(pagToken string, resourceID *v2.ResourceId) (*pagination.Bag
 	}
 
 	var page uint64 = 0
-	// if b.Current() == nil && b.Current().Token != "" {
-	// 	var err error
-	// 	page, err = strconv.ParseUint(b.Current().Token, 10, 32)
-	// 	if err != nil {
-	// 		return nil, 0, fmt.Errorf("grafana-connector: failed to convert string to uint %s: %w pageToke:%v", resourceID, err, b.PageToken())
-	// 	}
-	// }
+
+	if b.Current() != nil && b.Current().Token != "" {
+		var err error
+		page, err = strconv.ParseUint(b.Current().Token, 10, 32)
+		if err != nil {
+			return nil, 0, fmt.Errorf("grafana-connector: failed to convert string to uint %s: %w pageToke:%v", resourceID, err, b.PageToken())
+		}
+	}
 
 	if b.Current() == nil {
 		b.Push(pagination.PageState{
@@ -48,10 +50,4 @@ func parsePageToken(pagToken string, resourceID *v2.ResourceId) (*pagination.Bag
 	}
 
 	return b, page, nil
-}
-
-func splitFullName(fullName string) (string, string) {
-	parts := strings.Split(fullName, " ")
-
-	return parts[0], strings.Join(parts[1:], " ")
 }
