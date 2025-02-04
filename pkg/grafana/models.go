@@ -8,21 +8,11 @@ import (
 
 // Client represents a Grafana API client.
 type Client struct {
-	httpClient  *uhttp.BaseHttpClient
-	baseUrl     *url.URL
-	currentUser string
+	httpClient *uhttp.BaseHttpClient
+	baseUrl    *url.URL
 
-	username     string
-	accessToken  string
-	password     string
-	token        string
-	refreshToken string
-}
-
-// PaginationVars holds pagination parameters for API requests.
-type PaginationVars struct {
-	Size uint64
-	Page uint64
+	username string
+	password string
 }
 
 type Organization struct {
@@ -57,4 +47,10 @@ type UserByOrgResponse struct {
 	IsDisabled         bool     `json:"isDisabled"`
 	AuthLabels         []string `json:"authLabels"`
 	IsExternallySynced bool     `json:"isExternallySynced"`
+}
+
+// PaginationVars holds pagination parameters for API requests.
+type PaginationVars struct {
+	Size uint64
+	Page uint64
 }

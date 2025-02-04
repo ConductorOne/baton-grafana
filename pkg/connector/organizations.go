@@ -26,7 +26,6 @@ var userRoles = []string{roleViewer, roleEditor, roleAdmin}
 type orgResourceType struct {
 	resourceType *v2.ResourceType
 	client       *grafana.Client
-	orgs         map[string]*struct{}
 }
 
 func (o *orgResourceType) ResourceType(ctx context.Context) *v2.ResourceType {
@@ -34,14 +33,11 @@ func (o *orgResourceType) ResourceType(ctx context.Context) *v2.ResourceType {
 }
 
 // Create a new connector resource for an grafana organization.
-func orgResource(ctx context.Context, org grafana.Organization) (*v2.Resource, error) {
+func orgResource(org grafana.Organization) (*v2.Resource, error) {
 	resource, err := rs.NewResource(
 		titleCase(org.Name),
 		resourceTypeOrg,
 		org.ID,
-		// rs.WithAnnotation(
-		// 	&v2.ChildResourceType{ResourceTypeId: resourceTypeUser.Id},
-		// ),
 	)
 
 	if err != nil {
@@ -51,12 +47,9 @@ func orgResource(ctx context.Context, org grafana.Organization) (*v2.Resource, e
 	return resource, nil
 }
 
-// List returns all the organizations from the database as resource objects.
-func (o *orgResourceType) List(ctx context.Context, parentId *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
-	// l := ctxzap.Extract(ctx)
-	// l.Info(fmt.Sprintf("(1) LISTING ORGS: parentID: %s -||- size: %d -||- token: %s <|||||", parentId, pToken.Size, pToken.Token))
-
-	// Parse pagination token
+// List returns all the organizations.
+func (o *orgResourceType) List(ctx context.Context, _ *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
+	// Parse pagination token. If Token is an empty string, the function returns 0.
 	bag, page, err := parsePageToken(pToken.Token, &v2.ResourceId{ResourceType: resourceTypeOrg.Id})
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("failed to parse page token: %w", err)
@@ -66,20 +59,19 @@ func (o *orgResourceType) List(ctx context.Context, parentId *v2.ResourceId, pTo
 		Size: ResourcesPageSize,
 		Page: page,
 	}
-	// l.Info(fmt.Sprintf("(2) LISTING ORGS: parentID: %s -||- size: %d -||- token: %s <|||||", parentId, pToken.Size, pToken.Token))
+
 	// Fetch organizations from Grafana
 	orgs, numNextPage, err := o.client.ListOrganizations(ctx, &paginationOpts)
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("grafana-connector: failed to list organizations: %w", err)
 	}
-	// l.Info(fmt.Sprintf("(3) LISTING ORGS: %v <|||||", orgs))
 
 	// Determine next page token
 	var pageToken string
 	if numNextPage > 0 {
 		pageToken = strconv.FormatUint(numNextPage, 10)
 	}
-	// l.Info(fmt.Sprintf("(4) LISTING ORGS: NextpageToken: %s -||- numNextPage: %d -||- pToken.Token: %s <|||||", pageToken, numNextPage, pToken.Token))
+
 	next, err := bag.NextToken(pageToken)
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("failed to generate next page token: %w", err)
@@ -89,7 +81,7 @@ func (o *orgResourceType) List(ctx context.Context, parentId *v2.ResourceId, pTo
 	resources := make([]*v2.Resource, 0, len(orgs))
 	for _, org := range orgs {
 		// Convert organization to a v2.Resource
-		resource, err := orgResource(ctx, org)
+		resource, err := orgResource(org)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("failed to create resource for org %s: %w", org.Name, err)
 		}
@@ -133,7 +125,6 @@ func (o *orgResourceType) Grants(ctx context.Context, parentResource *v2.Resourc
 	}
 
 	grants := make([]*v2.Grant, 0, len(usersByOrgResponse))
-	// grants := make([]*v2.Grant, 0, 5)
 
 	// Iterate through users and create grants
 	for _, userByOrg := range usersByOrgResponse {
@@ -156,15 +147,9 @@ func (o *orgResourceType) Grants(ctx context.Context, parentResource *v2.Resourc
 	return grants, "", nil, nil
 }
 
-func orgBuilder(client *grafana.Client, orgs []string) *orgResourceType {
-	orgMap := make(map[string]*struct{})
-	for _, org := range orgs {
-		orgMap[org] = &struct{}{}
-	}
-
+func orgBuilder(client *grafana.Client) *orgResourceType {
 	return &orgResourceType{
 		resourceType: resourceTypeOrg,
 		client:       client,
-		orgs:         orgMap,
 	}
 }

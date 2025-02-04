@@ -59,7 +59,7 @@ func userResource(ctx context.Context, user *grafana.User) (*v2.Resource, error)
 
 // List fetches all users in Grafana.
 func (u *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
-	// Parse pagination token
+	// Parse pagination token. If Token is an empty string, the function returns 0.
 	bag, page, err := parsePageToken(pToken.Token, &v2.ResourceId{ResourceType: resourceTypeUser.Id})
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("failed to parse page token: %w", err)
@@ -87,8 +87,9 @@ func (u *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pToken *p
 		return nil, "", nil, fmt.Errorf("failed to generate next token: %w", err)
 	}
 
-	// Convert users to resources
 	resources := make([]*v2.Resource, 0, len(users))
+
+	// Convert users to resources
 	for _, user := range users {
 		ur, err := userResource(ctx, &user)
 		if err != nil {

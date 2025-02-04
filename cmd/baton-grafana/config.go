@@ -6,18 +6,14 @@ import (
 )
 
 var (
-	AccessToken = field.StringField("access-token", field.WithDescription("The Grafana Personal Access Token used to connect to the Grafana API."))
-	Username    = field.StringField("username", field.WithDescription("The Grafana username used to connect to the Grafana API."))
-	Password    = field.StringField("password", field.WithDescription("The Grafana password used to connect to the Grafana API."))
-	Orgs        = field.StringSliceField("orgs", field.WithDescription("Limit syncing to specific organizations by providing organization slugs."))
+	Username = field.StringField("username", field.WithRequired(true), field.WithDescription("The Grafana username used to connect to the Grafana API."))
+	Password = field.StringField("password", field.WithRequired(true), field.WithDescription("The Grafana password used to connect to the Grafana API."))
 	// ConfigurationFields defines the external configuration required for the
 	// connector to run. Note: these fields can be marked as optional or
 	// required.
 	ConfigurationFields = []field.SchemaField{
 		Username,
-		AccessToken,
 		Password,
-		Orgs,
 	}
 
 	// FieldRelationships defines relationships between the fields listed in
@@ -25,10 +21,6 @@ var (
 	// username and password can be required together, or an access token can be
 	// marked as mutually exclusive from the username password pair.
 	FieldRelationships = []field.SchemaFieldRelationship{
-		field.FieldsAtLeastOneUsed(AccessToken, Password),
-
-		field.FieldsMutuallyExclusive(AccessToken, Password),
-
 		field.FieldsRequiredTogether(Username, Password),
 	}
 

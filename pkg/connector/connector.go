@@ -16,13 +16,12 @@ import (
 // Grafana represents the Baton connector for Grafana.
 type Grafana struct {
 	client *grafana.Client
-	orgs   []string
 }
 
 // ResourceSyncers returns a list of syncers for different resource types.
 func (g *Grafana) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncer {
 	return []connectorbuilder.ResourceSyncer{
-		orgBuilder(g.client, g.orgs),
+		orgBuilder(g.client),
 		userBuilder(g.client),
 	}
 }
@@ -57,41 +56,17 @@ func (g *Grafana) Validate(ctx context.Context) (annotations.Annotations, error)
 }
 
 // New initializes a new instance of the Grafana connector.
-func New(ctx context.Context, username, accessToken, password string, orgs []string) (*Grafana, error) {
+func New(ctx context.Context, username, password string) (*Grafana, error) {
 	l := ctxzap.Extract(ctx)
 	l.Debug("creating Grafana client")
 
-	grafanaClient, err := grafana.NewClient(ctx, username, password, accessToken)
+	grafanaClient, err := grafana.NewClient(ctx, username, password)
 	if err != nil {
 		l.Error("error creating Grafana client", zap.Error(err))
 		return nil, err
 	}
 
-	err = grafanaClient.SetCurrentUser(ctx, username)
-	if err != nil {
-		l.Error("error setting current user", zap.Error(err))
-		return nil, err
-	}
-
-	// if len(orgs) == 0 {
-	// 	paginationOpts := grafana.PaginationVars{
-	// 		Size: ResourcesPageSize,
-	// 		Page: 1,
-	// 	}
-
-	// 	currentUserOrgs, _, err := grafanaClient.ListOrganizations(ctx, &paginationOpts)
-
-	// 	if err == nil {
-	// 		orgsIDs := make([]string, len(currentUserOrgs))
-	// 		for i, s := range currentUserOrgs {
-	// 			orgsIDs[i] = fmt.Sprintf("%d", s.ID) // Convert int to string
-	// 		}
-	// 		orgs = append(orgs, orgsIDs...)
-	// 	}
-	// }
-
 	return &Grafana{
 		client: grafanaClient,
-		orgs:   orgs,
 	}, nil
 }

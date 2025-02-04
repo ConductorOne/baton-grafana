@@ -25,6 +25,8 @@ func annotationsForUserResourceType() annotations.Annotations {
 	return annos
 }
 
+// If pagToken is an empty string, the function returns 0,
+// as page 0 is considered the first page.
 func parsePageToken(pagToken string, resourceID *v2.ResourceId) (*pagination.Bag, uint64, error) {
 	b := &pagination.Bag{}
 	err := b.Unmarshal(pagToken)

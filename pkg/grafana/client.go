@@ -21,18 +21,8 @@ const (
 	ListUsersInOrgPath = "/api/orgs/%s/users"
 )
 
-type CredentialsReq struct {
-	Username string `json:"username"`
-	Password string `json:"password"`
-}
-
-type TokenResp struct {
-	Token        string `json:"token"`
-	RefreshToken string `json:"refresh_token"`
-}
-
 // NewClient initializes a new Grafana API client.
-func NewClient(ctx context.Context, username, password, accessToken string) (*Client, error) {
+func NewClient(ctx context.Context, username, password string) (*Client, error) {
 	base := &url.URL{
 		Scheme: Protocol,
 		Host:   fmt.Sprintf("%s:%s", BaseDomain, Port),
@@ -48,46 +38,11 @@ func NewClient(ctx context.Context, username, password, accessToken string) (*Cl
 		return nil, err
 	}
 
-	reqOptions := []uhttp.RequestOption{
-		uhttp.WithContentType("application/json"),
-		uhttp.WithAccept("application/json"),
-	}
-
-	// Conditionally set authentication method
-	if accessToken != "" {
-		reqOptions = append(reqOptions, uhttp.WithBearerToken(accessToken))
-	} else if username != "" && password != "" {
-		authString := fmt.Sprintf("%s:%s", username, password)
-		authEncoded := base64.StdEncoding.EncodeToString([]byte(authString))
-		reqOptions = append(reqOptions, uhttp.WithHeader("Authorization", "Basic "+authEncoded))
-	}
-
-	urlAddress := base.ResolveReference(&url.URL{Path: "/api/user"})
-
-	req, err := wrapper.NewRequest(ctx, http.MethodGet, urlAddress, reqOptions...)
-	if err != nil {
-		return nil, err
-	}
-
-	data := &TokenResp{}
-	doOptions := []uhttp.DoOption{
-		uhttp.WithJSONResponse(data),
-	}
-	resp, err := wrapper.Do(req, doOptions...)
-	if err != nil {
-		return nil, err
-	}
-
-	defer resp.Body.Close()
-
 	return &Client{
-		httpClient:   wrapper,
-		baseUrl:      base,
-		username:     username,
-		accessToken:  accessToken,
-		password:     password,
-		token:        data.Token,
-		refreshToken: data.RefreshToken,
+		httpClient: wrapper,
+		baseUrl:    base,
+		username:   username,
+		password:   password,
 	}, nil
 }
 
@@ -122,7 +77,7 @@ func (c *Client) ListOrganizations(ctx context.Context, pVars *PaginationVars) (
 		nextPage = pVars.Page + 1
 	}
 
-	return organizationsResponse, nextPage, nil //
+	return organizationsResponse, nextPage, nil
 }
 
 // ListUsersByOrg fetches all users in a given Grafana organization.
@@ -156,34 +111,7 @@ func (c *Client) ListUsers(ctx context.Context, pVars *PaginationVars) ([]User, 
 	return usersResponse, nextPage, nil
 }
 
-// GetCurrentUser fetches information about the currently logged-in user.
-// func (c *Client) GetCurrentUser(ctx context.Context) (*User, error) {
-// 	var userResponse User
-// 	err := c.doRequest(ctx, http.MethodGet, "/api/user", &userResponse, nil, nil)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	return &userResponse, nil
-// }
-
-// SetCurrentUser sets the current user for the client.
-func (c *Client) SetCurrentUser(ctx context.Context, username string) error {
-	c.currentUser = username
-
-	return nil
-}
-
-// ListDashboards fetches all dashboards in Grafana.
-// func (c *Client) ListDashboards(ctx context.Context, pagination PaginationVars) ([]Dashboard, error) {
-// 	var response ListResponse[Dashboard]
-// 	err := c.doRequest(ctx, http.MethodGet, c.composeURL("/api/search"), &response, nil, &pagination)
-// 	if err != nil {
-// 		return nil, err
-// 	}
-// 	return response.Items, nil
-// }
-
-func setupPagination(ctx context.Context, addr *url.URL, paginationVars *PaginationVars) *url.Values {
+func setupPagination(addr *url.URL, paginationVars *PaginationVars) *url.Values {
 	if paginationVars == nil {
 		return nil
 	}
@@ -212,21 +140,25 @@ func (c *Client) doRequest(
 	data interface{},
 	paginationVars *PaginationVars,
 ) error {
-	l := ctxzap.Extract(ctx)
-	l.Info(fmt.Sprintf("DO REQUEST: urlurlAddress: %s <|||||", urlAddress))
 	var err error
 
 	reqOptions := []uhttp.RequestOption{
 		uhttp.WithContentType("application/json"),
 		uhttp.WithAccept("application/json"),
 	}
-	reqOptions = append(reqOptions, uhttp.WithHeader("Authorization", "Basic YWRtaW46YWRtaW4="))
+
+	// Set authentication method
+	if c.username != "" && c.password != "" {
+		authString := fmt.Sprintf("%s:%s", c.username, c.password)
+		authEncoded := base64.StdEncoding.EncodeToString([]byte(authString))
+		reqOptions = append(reqOptions, uhttp.WithHeader("Authorization", "Basic "+authEncoded))
+	}
 
 	if data != nil {
 		reqOptions = append(reqOptions, uhttp.WithJSONBody(data))
 	}
 
-	q := setupPagination(ctx, urlAddress, paginationVars)
+	q := setupPagination(urlAddress, paginationVars)
 	if q != nil {
 		urlAddress.RawQuery = q.Encode()
 	}
@@ -251,7 +183,7 @@ func (c *Client) doRequest(
 	return nil
 }
 
-// Convert UserByOrg to User
+// Convert UserByOrg to User.
 func (ubo UserByOrgResponse) ToUser() User {
 	return User{
 		ID:            ubo.ID, // Maps userId -> id
