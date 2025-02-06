@@ -24,7 +24,7 @@ func (u *userResourceType) ResourceType(ctx context.Context) *v2.ResourceType {
 }
 
 // userResource creates a Baton resource for a Grafana user.
-func userResource(ctx context.Context, user *grafana.User) (*v2.Resource, error) {
+func userResource(user *grafana.User) (*v2.Resource, error) {
 	profile := map[string]interface{}{
 		"full_name": user.Name,
 		"login":     user.Login,
@@ -91,7 +91,7 @@ func (u *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pToken *p
 
 	// Convert users to resources
 	for _, user := range users {
-		ur, err := userResource(ctx, &user)
+		ur, err := userResource(&user)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("failed to create resource for user %s: %w", user.Email, err)
 		}

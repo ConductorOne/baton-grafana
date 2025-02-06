@@ -43,7 +43,7 @@ func (g *Grafana) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error) {
 func (g *Grafana) Validate(ctx context.Context) (annotations.Annotations, error) {
 	paginationOpts := grafana.PaginationVars{
 		Size: 1,
-		Page: 1,
+		Page: 0,
 	}
 
 	// Get the scope of used credentials
@@ -56,11 +56,11 @@ func (g *Grafana) Validate(ctx context.Context) (annotations.Annotations, error)
 }
 
 // New initializes a new instance of the Grafana connector.
-func New(ctx context.Context, username, password string) (*Grafana, error) {
+func New(ctx context.Context, hostname, protocol, username, password string) (*Grafana, error) {
 	l := ctxzap.Extract(ctx)
 	l.Debug("creating Grafana client")
 
-	grafanaClient, err := grafana.NewClient(ctx, username, password)
+	grafanaClient, err := grafana.NewClient(ctx, hostname, protocol, username, password)
 	if err != nil {
 		l.Error("error creating Grafana client", zap.Error(err))
 		return nil, err

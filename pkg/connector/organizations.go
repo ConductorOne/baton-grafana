@@ -135,7 +135,7 @@ func (o *orgResourceType) Grants(ctx context.Context, parentResource *v2.Resourc
 
 		// Convert UserByOrg to User only when needed
 		user := userByOrg.ToUser()
-		ur, err := userResource(ctx, &user)
+		ur, err := userResource(&user)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("failed to generate user resource for %s: %w", user.Email, err)
 		}

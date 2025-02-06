@@ -12,20 +12,17 @@ import (
 )
 
 const (
-	BaseDomain = "localhost"
-	Protocol   = "http"
-	Port       = "3000"
-
 	ListUsersPath      = "/api/users"
 	ListOrgsPath       = "/api/orgs"
 	ListUsersInOrgPath = "/api/orgs/%s/users"
 )
 
 // NewClient initializes a new Grafana API client.
-func NewClient(ctx context.Context, username, password string) (*Client, error) {
+func NewClient(ctx context.Context, hostname, protocol, username, password string) (*Client, error) {
+
 	base := &url.URL{
-		Scheme: Protocol,
-		Host:   fmt.Sprintf("%s:%s", BaseDomain, Port),
+		Scheme: protocol,
+		Host:   hostname,
 	}
 
 	httpClient, err := uhttp.NewClient(ctx, uhttp.WithLogger(true, ctxzap.Extract(ctx)))
