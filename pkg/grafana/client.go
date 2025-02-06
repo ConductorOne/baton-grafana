@@ -19,7 +19,6 @@ const (
 
 // NewClient initializes a new Grafana API client.
 func NewClient(ctx context.Context, hostname, protocol, username, password string) (*Client, error) {
-
 	base := &url.URL{
 		Scheme: protocol,
 		Host:   hostname,
