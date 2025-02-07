@@ -23,12 +23,12 @@ const (
 
 var userRoles = []string{roleViewer, roleEditor, roleAdmin}
 
-type orgResourceType struct {
+type orgBuilder struct {
 	resourceType *v2.ResourceType
 	client       *grafana.Client
 }
 
-func (o *orgResourceType) ResourceType(ctx context.Context) *v2.ResourceType {
+func (o *orgBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return resourceTypeOrg
 }
 
@@ -48,9 +48,9 @@ func orgResource(org grafana.Organization) (*v2.Resource, error) {
 }
 
 // List returns all the organizations.
-func (o *orgResourceType) List(ctx context.Context, _ *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
+func (o *orgBuilder) List(ctx context.Context, _ *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
 	// Parse pagination token. If Token is an empty string, the function returns 0.
-	bag, page, err := parsePageToken(pToken.Token, &v2.ResourceId{ResourceType: resourceTypeOrg.Id})
+	bag, page, err := parsePageToken(pToken, &v2.ResourceId{ResourceType: resourceTypeOrg.Id})
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("failed to parse page token: %w", err)
 	}
@@ -93,7 +93,7 @@ func (o *orgResourceType) List(ctx context.Context, _ *v2.ResourceId, pToken *pa
 }
 
 // Entitlements returns a slice of entitlements for possible user roles under organization (Viewer, Editor, Admin).
-func (o *orgResourceType) Entitlements(_ context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
+func (o *orgBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
 	// Preallocate slice for efficiency
 	entitlements := make([]*v2.Entitlement, 0, len(userRoles))
 
@@ -117,7 +117,7 @@ func (o *orgResourceType) Entitlements(_ context.Context, resource *v2.Resource,
 }
 
 // Grants returns a slice of grants for each user and their set role under organization.
-func (o *orgResourceType) Grants(ctx context.Context, parentResource *v2.Resource, _ *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
+func (o *orgBuilder) Grants(ctx context.Context, parentResource *v2.Resource, _ *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
 	// Fetch users under the organization (The endpoint used in this method does not support pagination.)
 	usersByOrgResponse, err := o.client.ListUsersByOrg(ctx, parentResource.Id.Resource)
 	if err != nil {
@@ -147,8 +147,8 @@ func (o *orgResourceType) Grants(ctx context.Context, parentResource *v2.Resourc
 	return grants, "", nil, nil
 }
 
-func orgBuilder(client *grafana.Client) *orgResourceType {
-	return &orgResourceType{
+func newOrgBuilder(client *grafana.Client) *orgBuilder {
+	return &orgBuilder{
 		resourceType: resourceTypeOrg,
 		client:       client,
 	}

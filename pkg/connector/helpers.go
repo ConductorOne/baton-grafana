@@ -25,31 +25,36 @@ func annotationsForUserResourceType() annotations.Annotations {
 	return annos
 }
 
-// If pagToken is an empty string, the function returns 0,
+// If pagToken.Token is an empty string, the function returns 0,
 // as page 0 is considered the first page.
-func parsePageToken(pagToken string, resourceID *v2.ResourceId) (*pagination.Bag, uint64, error) {
-	b := &pagination.Bag{}
-	err := b.Unmarshal(pagToken)
+func parsePageToken(pagToken *pagination.Token, resourceID *v2.ResourceId) (*pagination.Bag, uint64, error) {
+	bag := &pagination.Bag{}
+	err := bag.Unmarshal(pagToken.Token)
 	if err != nil {
 		return nil, 0, err
 	}
 
-	var page uint64 = 0
+	var page uint64
 
-	if b.Current() != nil && b.Current().Token != "" {
-		var err error
-		page, err = strconv.ParseUint(b.Current().Token, 10, 32)
-		if err != nil {
-			return nil, 0, fmt.Errorf("grafana-connector: failed to convert string to uint %s: %w pageToke:%v", resourceID, err, b.PageToken())
-		}
-	}
-
-	if b.Current() == nil {
-		b.Push(pagination.PageState{
+	if bag.Current() == nil {
+		// If no current page state, push a new one for the provided resource.
+		bag.Push(pagination.PageState{
 			ResourceTypeID: resourceID.ResourceType,
 			ResourceID:     resourceID.Resource,
 		})
+	} else if bag.Current().Token != "" {
+		p, err := strconv.ParseUint(bag.Current().Token, 10, 32)
+		if err != nil {
+			return nil, 0, fmt.Errorf(
+				"grafana-connector: failed to parse page token for resource type '%s' id '%s': %w (pageToken: %q)",
+				resourceID.ResourceType,
+				resourceID.Resource,
+				err,
+				bag.PageToken(),
+			)
+		}
+		page = p
 	}
 
-	return b, page, nil
+	return bag, page, nil
 }

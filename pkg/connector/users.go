@@ -12,14 +12,13 @@ import (
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 )
 
-// userResourceType represents the user entity in Grafana.
-type userResourceType struct {
+type userBuilder struct {
 	resourceType *v2.ResourceType
 	client       *grafana.Client
 }
 
 // ResourceType returns the Baton resource type for users.
-func (u *userResourceType) ResourceType(ctx context.Context) *v2.ResourceType {
+func (u *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
 	return resourceTypeUser
 }
 
@@ -58,9 +57,9 @@ func userResource(user *grafana.User) (*v2.Resource, error) {
 }
 
 // List fetches all users in Grafana.
-func (u *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
+func (u *userBuilder) List(ctx context.Context, _ *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
 	// Parse pagination token. If Token is an empty string, the function returns 0.
-	bag, page, err := parsePageToken(pToken.Token, &v2.ResourceId{ResourceType: resourceTypeUser.Id})
+	bag, page, err := parsePageToken(pToken, &v2.ResourceId{ResourceType: resourceTypeUser.Id})
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("failed to parse page token: %w", err)
 	}
@@ -102,18 +101,18 @@ func (u *userResourceType) List(ctx context.Context, _ *v2.ResourceId, pToken *p
 }
 
 // Entitlements returns an empty list for users.
-func (u *userResourceType) Entitlements(_ context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
+func (u *userBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
 	return nil, "", nil, nil
 }
 
 // Grants returns an empty list for users.
-func (u *userResourceType) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
+func (u *userBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
 	return nil, "", nil, nil
 }
 
-// userBuilder initializes a user resource type.
-func userBuilder(client *grafana.Client) *userResourceType {
-	return &userResourceType{
+// newUserBuilder initializes a user resource type.
+func newUserBuilder(client *grafana.Client) *userBuilder {
+	return &userBuilder{
 		resourceType: resourceTypeUser,
 		client:       client,
 	}

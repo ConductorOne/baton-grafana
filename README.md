@@ -50,7 +50,6 @@ You can install `baton-grafana` using **Homebrew**, **Docker**, or directly from
 
 ### Docker
     docker run --rm -v $(pwd):/out \
-      -e BATON_PROTOCOL=<protocol> \
       -e BATON_HOSTNAME=<hostname> \
       -e BATON_USERNAME=<username> \
       -e BATON_PASSWORD=<password> \
@@ -73,17 +72,15 @@ You can install `baton-grafana` using **Homebrew**, **Docker**, or directly from
 
 **Configuration Fields:**
 
-| Parameter     | Required | Default          | Description                                       |
-|---------------|----------|------------------|---------------------------------------------------|
-| --protocol    | No       | `http`           | Protocol used to connect (http or https).         |
-| --hostname    | No       | `localhost:3000` | The Grafana server hostname.                      |
-| --username    | Yes      | -                | Grafana admin username.                           |
-| --password    | Yes      | -                | Grafana admin password.                           |
+| Parameter     | Required | Default                 | Description                                       |
+|---------------|----------|-------------------------|---------------------------------------------------|
+| --hostname    | No       | `http://localhost:3000` | The Grafana server hostname.                      |
+| --username    | Yes      | -                       | Grafana admin username.                           |
+| --password    | Yes      | -                       | Grafana admin password.                           |
 
 You can also set these values using environment variables:
 
-    export BATON_PROTOCOL="https"
-    export BATON_HOSTNAME="example.com"
+    export BATON_HOSTNAME="http://example.com"
     export BATON_USERNAME="admin"
     export BATON_PASSWORD="your-password"
 
@@ -145,24 +142,23 @@ This information provides insight into user access management in Grafana.
 
 Below is a complete list of supported flags along with their corresponding environment variables and default values (if applicable):
 
-| Flag                 | Description                                                                                 | Env Variable           | Default            |
-|----------------------|---------------------------------------------------------------------------------------------|------------------------|--------------------|
-| **-f, --file**       | The path to the `.c1z` file used for syncing                                               | `BATON_FILE`          | `sync.c1z`         |
+| Flag                 | Description                                                                                 | Env Variable          | Default            |
+|----------------------|---------------------------------------------------------------------------------------------|-----------------------|--------------------|
+| **-f, --file**       | The path to the `.c1z` file used for syncing                                               | `BATON_FILE`           | `sync.c1z`         |
 | **-h, --help**       | Show help and usage information                                                            | -                      | -                  |
 | **-p, --provisioning** | Enable provisioning support (if supported by the connector)                              | `BATON_PROVISIONING`   | -                  |
 | **-v, --version**    | Show version information                                                                   | -                      | -                  |
 | **--client-id**      | The client ID used to authenticate with ConductorOne                                       | `BATON_CLIENT_ID`      | -                  |
-| **--client-secret**  | The client secret used to authenticate with ConductorOne                                    | `BATON_CLIENT_SECRET`  | -                  |
-| **--hostname**       | Grafana hostname (e.g., `localhost:3000`)                                                  | `BATON_HOSTNAME`       | `localhost:3000`   |
+| **--client-secret**  | The client secret used to authenticate with ConductorOne                                   | `BATON_CLIENT_SECRET`  | -                  |
+| **--hostname**       | Grafana hostname (e.g., `http://localhost:3000`)                                           | `BATON_HOSTNAME`       | `http://localhost:3000`  |
 | **--log-format**     | The output format for logs: `json` or `console`                                            | `BATON_LOG_FORMAT`     | `json`             |
 | **--log-level**      | The log level: `debug`, `info`, `warn`, `error`                                            | `BATON_LOG_LEVEL`      | `info`             |
 | **--password**       | Grafana admin password                                                                     | `BATON_PASSWORD`       | -                  |
-| **--protocol**       | The protocol used to connect to Grafana (`http` or `https`)                                | `BATON_PROTOCOL`       | `http`             |
 | **--skip-full-sync** | Skip a full sync (helpful for incremental updates if supported by the connector)           | `BATON_SKIP_FULL_SYNC` | -                  |
 | **--ticketing**      | Enable ticketing support (if the connector supports ticketing features)                    | `BATON_TICKETING`      | -                  |
 | **--username**       | Grafana admin username                                                                     | `BATON_USERNAME`       | -                  |
 
-> **Tip**: You can combine flags and environment variables. For example, if you set `BATON_PROTOCOL=https` and `BATON_HOSTNAME=my-grafana.domain` as environment variables, you don’t need to pass `--protocol` or `--hostname` explicitly when running commands.
+> **Tip**: You can combine flags and environment variables. For example, if you set `BATON_HOSTNAME=my-grafana.domain` as environment variable, you don’t need to pass `--hostname` explicitly when running commands.
 
 ---
 

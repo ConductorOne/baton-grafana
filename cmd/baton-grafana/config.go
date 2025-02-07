@@ -6,8 +6,7 @@ import (
 )
 
 var (
-	Protocol = field.StringField("protocol", field.WithDescription("The Grafana protocol (http or https) used to connect to the Grafana API"), field.WithDefaultValue("http"))
-	Hostname = field.StringField("hostname", field.WithDescription("The Grafana hostname used to connect to the Grafana API"), field.WithDefaultValue("localhost:3000"))
+	Hostname = field.StringField("hostname", field.WithDescription("The Grafana hostname used to connect to the Grafana API"), field.WithDefaultValue("http://localhost:3000"))
 	Username = field.StringField("username", field.WithRequired(true), field.WithDescription("The Grafana username used to connect to the Grafana API."))
 	Password = field.StringField("password", field.WithRequired(true), field.WithDescription("The Grafana password used to connect to the Grafana API."))
 	// ConfigurationFields defines the external configuration required for the
@@ -15,7 +14,6 @@ var (
 	// required.
 	ConfigurationFields = []field.SchemaField{
 		Hostname,
-		Protocol,
 		Username,
 		Password,
 	}

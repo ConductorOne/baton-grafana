@@ -21,8 +21,8 @@ type Grafana struct {
 // ResourceSyncers returns a list of syncers for different resource types.
 func (g *Grafana) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncer {
 	return []connectorbuilder.ResourceSyncer{
-		orgBuilder(g.client),
-		userBuilder(g.client),
+		newOrgBuilder(g.client),
+		newUserBuilder(g.client),
 	}
 }
 
@@ -56,13 +56,11 @@ func (g *Grafana) Validate(ctx context.Context) (annotations.Annotations, error)
 }
 
 // New initializes a new instance of the Grafana connector.
-func New(ctx context.Context, hostname, protocol, username, password string) (*Grafana, error) {
-	l := ctxzap.Extract(ctx)
-	l.Debug("creating Grafana client")
-
-	grafanaClient, err := grafana.NewClient(ctx, hostname, protocol, username, password)
+func New(ctx context.Context, hostname, username, password string) (*Grafana, error) {
+	grafanaClient, err := grafana.NewClient(ctx, hostname, username, password)
 	if err != nil {
-		l.Error("error creating Grafana client", zap.Error(err))
+		l := ctxzap.Extract(ctx)
+		l.Error("Error creating Grafana client", zap.Error(err))
 		return nil, err
 	}
 

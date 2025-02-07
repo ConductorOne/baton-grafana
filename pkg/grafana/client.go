@@ -18,10 +18,10 @@ const (
 )
 
 // NewClient initializes a new Grafana API client.
-func NewClient(ctx context.Context, hostname, protocol, username, password string) (*Client, error) {
-	base := &url.URL{
-		Scheme: protocol,
-		Host:   hostname,
+func NewClient(ctx context.Context, hostname, username, password string) (*Client, error) {
+	baseUrl, err := url.Parse(hostname)
+	if err != nil {
+		return nil, err
 	}
 
 	httpClient, err := uhttp.NewClient(ctx, uhttp.WithLogger(true, ctxzap.Extract(ctx)))
@@ -36,19 +36,33 @@ func NewClient(ctx context.Context, hostname, protocol, username, password strin
 
 	return &Client{
 		httpClient: wrapper,
-		baseUrl:    base,
+		baseUrl:    baseUrl,
 		username:   username,
 		password:   password,
 	}, nil
 }
 
-// composeURL builds the full API endpoint URL.
-func (c *Client) composeURL(endpoint string, params ...interface{}) *url.URL {
-	path := endpoint
-	if len(params) > 0 {
-		path = fmt.Sprintf(endpoint, params...)
+// buildResourceURL constructs an absolute URL by formatting a resource path
+// template (like "/api/orgs/%d/users") with optional parameters, then resolving it
+// against c.baseURL.
+//
+// Example:
+//
+//	If c.baseURL is https://example.com/ and you call:
+//	    buildResourceURL("/api/orgs/%d/users", 42)
+//	The final URL might be:
+//	    https://example.com/api/orgs/42/users
+//
+// If no parameters are given, the template is used as-is.
+// Any errors (like invalid baseURL) can be handled as needed.
+func (c *Client) buildResourceURL(pathTemplate string, args ...interface{}) *url.URL {
+	// If no parameters, just use the raw template
+	finalPath := pathTemplate
+	if len(args) > 0 {
+		finalPath = fmt.Sprintf(pathTemplate, args...)
 	}
-	return c.baseUrl.ResolveReference(&url.URL{Path: path})
+	// ResolveReference merges the base URL and finalPath into an absolute URL.
+	return c.baseUrl.ResolveReference(&url.URL{Path: finalPath})
 }
 
 // ListOrganizations return organizations for the current user.
@@ -59,7 +73,7 @@ func (c *Client) ListOrganizations(ctx context.Context, pVars *PaginationVars) (
 	err := c.doRequest(
 		ctx,
 		http.MethodGet,
-		c.composeURL(ListOrgsPath),
+		c.buildResourceURL(ListOrgsPath),
 		&organizationsResponse,
 		nil,
 		pVars,
@@ -81,7 +95,7 @@ func (c *Client) ListUsersByOrg(ctx context.Context, orgID string) ([]UserByOrgR
 	var usersByOrgResponse []UserByOrgResponse
 
 	// Make the request without pagination as the endpoint does not support it
-	err := c.doRequest(ctx, http.MethodGet, c.composeURL(ListUsersInOrgPath, orgID), &usersByOrgResponse, nil, nil)
+	err := c.doRequest(ctx, http.MethodGet, c.buildResourceURL(ListUsersInOrgPath, orgID), &usersByOrgResponse, nil, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +108,7 @@ func (c *Client) ListUsers(ctx context.Context, pVars *PaginationVars) ([]User, 
 	var usersResponse []User
 	var nextPage uint64
 
-	err := c.doRequest(ctx, http.MethodGet, c.composeURL(ListUsersPath), &usersResponse, nil, pVars)
+	err := c.doRequest(ctx, http.MethodGet, c.buildResourceURL(ListUsersPath), &usersResponse, nil, pVars)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -144,11 +158,9 @@ func (c *Client) doRequest(
 	}
 
 	// Set authentication method
-	if c.username != "" && c.password != "" {
-		authString := fmt.Sprintf("%s:%s", c.username, c.password)
-		authEncoded := base64.StdEncoding.EncodeToString([]byte(authString))
-		reqOptions = append(reqOptions, uhttp.WithHeader("Authorization", "Basic "+authEncoded))
-	}
+	authString := fmt.Sprintf("%s:%s", c.username, c.password)
+	authEncoded := base64.StdEncoding.EncodeToString([]byte(authString))
+	reqOptions = append(reqOptions, uhttp.WithHeader("Authorization", "Basic "+authEncoded))
 
 	if data != nil {
 		reqOptions = append(reqOptions, uhttp.WithJSONBody(data))

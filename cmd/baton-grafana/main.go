@@ -39,11 +39,10 @@ func getConnector(ctx context.Context, v *viper.Viper) (types.ConnectorServer, e
 	l := ctxzap.Extract(ctx)
 
 	hostname := v.GetString(Hostname.FieldName)
-	protocol := v.GetString(Protocol.FieldName)
 	username := v.GetString(Username.FieldName)
 	password := v.GetString(Password.FieldName)
 
-	cb, err := connector.New(ctx, hostname, protocol, username, password)
+	cb, err := connector.New(ctx, hostname, username, password)
 	if err != nil {
 		l.Error("error creating connector", zap.Error(err))
 		return nil, err
