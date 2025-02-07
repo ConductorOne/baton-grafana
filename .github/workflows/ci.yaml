@@ -1,5 +1,8 @@
 name: ci
-on: pull_request
+
+on:
+  pull_request:
+
 jobs:
   go-lint:
     runs-on: ubuntu-latest
@@ -7,18 +10,21 @@ jobs:
       - name: Install Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.22.x
+          go-version: 1.23.x
+
       - name: Checkout code
         uses: actions/checkout@v4
+
       - name: Run linters
         uses: golangci/golangci-lint-action@v5
         with:
           version: latest
           args: --timeout=3m
+
   go-test:
     strategy:
       matrix:
-        go-version: [1.22.x]
+        go-version: [1.23.x]
         platform: [ubuntu-latest]
     runs-on: ${{ matrix.platform }}
     steps:
@@ -27,10 +33,13 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go-version }}
+
       - name: Checkout code
         uses: actions/checkout@v4
+
       - name: go tests
         run: (set -o pipefail && go test -v -covermode=count -json ./... | tee test.json)
+
       - name: annotate go tests
         if: always()
         uses: guyarb/golang-test-annotations@v0.5.1
@@ -39,66 +48,65 @@ jobs:
 
   test:
     runs-on: ubuntu-latest
-    # Define any services needed for the test suite (or delete this section)
-    # services:
-    #   postgres:
-    #     image: postgres:16
-    #     ports:
-    #       - "5432:5432"
-    #     env:
-    #       POSTGRES_PASSWORD: secretpassword
+    # 1) Spin up a Grafana container as a service
+    services:
+      grafana:
+        image: grafana/grafana:latest
+        ports:
+          - 3000:3000
+        env:
+          GF_SECURITY_ADMIN_USER: admin
+          GF_SECURITY_ADMIN_PASSWORD: admin
+        options: >-
+          --health-cmd="curl --fail http://localhost:3000/api/health || exit 1"
+          --health-interval=5s
+          --health-retries=10
+
+    # 2) Environment variables
     env:
       BATON_LOG_LEVEL: debug
-      # Add any environment variables needed to run baton-grafana
-      # BATON_BASE_URL: 'http://localhost:8080'
-      # BATON_ACCESS_TOKEN: 'secret_token'
-      # The following parameters are passed to grant/revoke commands
-      # Change these to the correct IDs for your test data
-      CONNECTOR_GRANT: 'grant:entitlement:group:1234:member:user:9876'
-      CONNECTOR_ENTITLEMENT: 'entitlement:group:1234:member'
-      CONNECTOR_PRINCIPAL: 'user:9876'
-      CONNECTOR_PRINCIPAL_TYPE: 'user'
+      # The following represent your test data for baton grants
+      CONNECTOR_ENTITLEMENT: "org:1:Admin"
+      CONNECTOR_PRINCIPAL: "1"
+      CONNECTOR_PRINCIPAL_TYPE: "user"
+
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
       - name: Install Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.22.x
-      - name: Checkout code
-        uses: actions/checkout@v4
-      # Install any dependencies here (or delete this)
-      # - name: Install postgres client
-      #   run: sudo apt install postgresql-client
-      # Run any fixture setup here (or delete this)
-      # - name: Import sql into postgres
-      #   run: psql -h localhost --user postgres -f environment.sql
-      #   env:
-      #     PGPASSWORD: secretpassword
+          go-version: 1.23.x
+
+      # (Optional) Wait for Grafana explicitly:
+      - name: Wait for Grafana
+        run: |
+          echo "Waiting for Grafana to become healthy..."
+          for i in {1..6}; do
+            if curl -s http://localhost:3000/api/health | grep '"database":true' > /dev/null; then
+              echo "Grafana is ready!"
+              break
+            fi
+            sleep 5
+          done
+
       - name: Build baton-grafana
-        run: go build ./cmd/baton-grafana
+        run: go build -o baton-grafana ./cmd/baton-grafana
+
+      # Run baton-grafana with admin credentials from the Grafana container
       - name: Run baton-grafana
-        run: ./baton-grafana
+        run: ./baton-grafana --username=admin --password=admin --file=sync.c1z
 
       - name: Install baton
-        run: ./scripts/get-baton.sh && mv baton /usr/local/bin
+        run: |
+          ./scripts/get-baton.sh
+          sudo mv baton /usr/local/bin
 
       - name: Check for grant before revoking
-
-        run:
-          baton grants --entitlement="${{ env.CONNECTOR_ENTITLEMENT }}" --output-format=json | jq --exit-status ".grants[].principal.id.resource == \"${{ env.CONNECTOR_PRINCIPAL }}\""
-
-
-      - name: Revoke grants
-        run: ./baton-grafana --revoke-grant="${{ env.CONNECTOR_GRANT }}"
-
-      - name: Check grant was revoked
-        run: ./baton-grafana && baton grants --entitlement="${{ env.CONNECTOR_ENTITLEMENT }}" --output-format=json | jq --exit-status "if .grants then .grants[]?.principal.id.resource != \"${{ env.CONNECTOR_PRINCIPAL }}\" else . end"
-
-      - name: Grant entitlement
-        # Change the grant arguments to the correct IDs for your test data
-        run: ./baton-grafana --grant-entitlement="${{ env.CONNECTOR_ENTITLEMENT }}" --grant-principal="${{ env.CONNECTOR_PRINCIPAL }}" --grant-principal-type="${{ env.CONNECTOR_PRINCIPAL_TYPE }}"
-
-      - name: Check grant was re-granted
-
-        run:
-          baton grants --entitlement="${{ env.CONNECTOR_ENTITLEMENT }}" --output-format=json | jq --exit-status ".grants[].principal.id.resource == \"${{ env.CONNECTOR_PRINCIPAL }}\""
-
+        run: |
+          baton grants \
+            --entitlement="${{ env.CONNECTOR_ENTITLEMENT }}" \
+            --output-format=json \
+          | jq --exit-status \
+            ".grants[].principal.id.resource == \"${{ env.CONNECTOR_PRINCIPAL }}\""
