@@ -24,6 +24,9 @@ jobs:
         run: go build -o connector ./cmd/baton-grafana
 
       - name: Run and save output
+        env:
+          BATON_USERNAME: "placeholder"
+          BATON_PASSWORD: "placeholder"
         run: ./connector capabilities > baton_capabilities.json
 
       - name: Commit changes
