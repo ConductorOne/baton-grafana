@@ -1,5 +1,5 @@
 {
-  "source": ["./dist/macos-arm64_darwin_arm64/baton-grafana"],
+  "source": ["./dist/macos-arm64_darwin_arm64_v8.0/baton-grafana"],
   "bundle_id": "com.conductorone.baton-grafana",
   "apple_id": {
     "username" : "justin.gallardo@conductorone.com"
