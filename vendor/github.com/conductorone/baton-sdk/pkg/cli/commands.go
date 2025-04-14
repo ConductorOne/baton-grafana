@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"time"
 
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"github.com/spf13/cobra"
@@ -24,6 +25,10 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/field"
 	"github.com/conductorone/baton-sdk/pkg/logging"
 	"github.com/conductorone/baton-sdk/pkg/uotel"
+)
+
+const (
+	otelShutdownTimeout = 5 * time.Second
 )
 
 type ContrainstSetter func(*cobra.Command, field.Configuration) error
@@ -56,18 +61,24 @@ func MakeMainCommand[T field.Configurable](
 			return err
 		}
 
-		l := ctxzap.Extract(runCtx)
-
-		otelShutdown, err := uotel.InitOtel(context.Background(), v.GetString("otel-collector-endpoint"), name)
+		runCtx, otelShutdown, err := initOtel(runCtx, name, v, nil)
 		if err != nil {
 			return err
 		}
 		defer func() {
-			err := otelShutdown(context.Background())
+			if otelShutdown == nil {
+				return
+			}
+			shutdownCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(otelShutdownTimeout))
+			defer cancel()
+			err := otelShutdown(shutdownCtx)
 			if err != nil {
-				l.Error("error shutting down otel", zap.Error(err))
+				zap.L().Error("error shutting down otel", zap.Error(err))
 			}
 		}()
+
+		// NOTE: initOtel may do stuff with the logger
+		l := ctxzap.Extract(runCtx)
 
 		if isService() {
 			l.Debug("running as service", zap.String("name", name))
@@ -221,6 +232,20 @@ func MakeMainCommand[T field.Configurable](
 			opts = append(opts, connectorrunner.WithTempDir(v.GetString("c1z-temp-dir")))
 		}
 
+		if v.GetString("external-resource-c1z") != "" {
+			externalResourceC1ZPath := v.GetString("external-resource-c1z")
+			_, err := os.Open(externalResourceC1ZPath)
+			if err != nil {
+				return fmt.Errorf("the specified external resource c1z file does not exist: %s", externalResourceC1ZPath)
+			}
+			opts = append(opts, connectorrunner.WithExternalResourceC1Z(externalResourceC1ZPath))
+		}
+
+		if v.GetString("external-resource-entitlement-id-filter") != "" {
+			externalResourceEntitlementIdFilter := v.GetString("external-resource-entitlement-id-filter")
+			opts = append(opts, connectorrunner.WithExternalResourceEntitlementFilter(externalResourceEntitlementIdFilter))
+		}
+
 		t, err := MakeGenericConfiguration[T](v)
 		if err != nil {
 			return fmt.Errorf("failed to make configuration: %w", err)
@@ -247,6 +272,39 @@ func MakeMainCommand[T field.Configurable](
 
 		return nil
 	}
+}
+
+func initOtel(ctx context.Context, name string, v *viper.Viper, initialLogFields map[string]interface{}) (context.Context, func(context.Context) error, error) {
+	otelEndpoint := v.GetString(field.OtelCollectorEndpointFieldName)
+	if otelEndpoint == "" {
+		return ctx, nil, nil
+	}
+
+	var otelOpts []uotel.Option
+	otelOpts = append(otelOpts, uotel.WithServiceName(fmt.Sprintf("%s-server", name)))
+
+	if len(initialLogFields) > 0 {
+		otelOpts = append(otelOpts, uotel.WithInitialLogFields(initialLogFields))
+	}
+
+	if v.GetBool(field.OtelTracingDisabledFieldName) {
+		otelOpts = append(otelOpts, uotel.WithTracingDisabled())
+	}
+
+	if v.GetBool(field.OtelLoggingDisabledFieldName) {
+		otelOpts = append(otelOpts, uotel.WithLoggingDisabled())
+	}
+
+	otelTLSInsecure := v.GetBool(field.OtelCollectorEndpointTLSInsecureFieldName)
+	if otelTLSInsecure {
+		otelOpts = append(otelOpts, uotel.WithInsecureOtelEndpoint(otelEndpoint))
+	} else {
+		otelTLSCert := v.GetString(field.OtelCollectorEndpointTLSCertFieldName)
+		otelTLSCertPath := v.GetString(field.OtelCollectorEndpointTLSCertPathFieldName)
+		otelOpts = append(otelOpts, uotel.WithOtelEndpoint(otelEndpoint, otelTLSCertPath, otelTLSCert))
+	}
+
+	return uotel.InitOtel(context.Background(), otelOpts...)
 }
 
 func MakeGRPCServerCommand[T field.Configurable](
@@ -276,22 +334,24 @@ func MakeGRPCServerCommand[T field.Configurable](
 			return err
 		}
 
-		l := ctxzap.Extract(runCtx)
-
-		otelShutdown, err := uotel.InitOtel(
-			context.Background(),
-			v.GetString("otel-collector-endpoint"),
-			fmt.Sprintf("%s-server", name),
-		)
+		runCtx, otelShutdown, err := initOtel(runCtx, name, v, nil)
 		if err != nil {
 			return err
 		}
 		defer func() {
-			err := otelShutdown(context.Background())
+			if otelShutdown == nil {
+				return
+			}
+			shutdownCtx, cancel := context.WithDeadline(context.Background(), time.Now().Add(otelShutdownTimeout))
+			defer cancel()
+			err := otelShutdown(shutdownCtx)
 			if err != nil {
-				l.Error("error shutting down otel", zap.Error(err))
+				zap.L().Error("error shutting down otel", zap.Error(err))
 			}
 		}()
+
+		l := ctxzap.Extract(runCtx)
+		l.Debug("starting grpc server")
 
 		// validate required fields and relationship constraints
 		if err := field.Validate(confschema, v); err != nil {
