@@ -1,7 +1,8 @@
 module github.com/conductorone/baton-grafana
 
-go 1.23
-toolchain go1.23.5
+go 1.23.4
+
+toolchain go1.24.2
 
 require (
 	github.com/conductorone/baton-sdk v0.2.75

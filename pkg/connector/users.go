@@ -2,14 +2,19 @@ package connector
 
 import (
 	"context"
+	"crypto/rand"
 	"fmt"
+	"math/big"
 	"strconv"
 
 	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 )
 
 type userBuilder struct {
@@ -116,4 +121,142 @@ func newUserBuilder(client *grafana.Client) *userBuilder {
 		resourceType: resourceTypeUser,
 		client:       client,
 	}
+}
+
+// generateRandomPassword creates a secure random password.
+func generateRandomPassword(length int) (string, error) {
+	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+[]{}|;:,.<>?"
+	password := make([]byte, length)
+
+	for i := 0; i < length; i++ {
+		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
+		if err != nil {
+			return "", err
+		}
+		password[i] = charset[n.Int64()]
+	}
+
+	return string(password), nil
+}
+
+// CreateAccountCapabilityDetails indicates the credential options this connector supports.
+func (u *userBuilder) CreateAccountCapabilityDetails(ctx context.Context) (*v2.CredentialDetailsAccountProvisioning, annotations.Annotations, error) {
+	return &v2.CredentialDetailsAccountProvisioning{
+		SupportedCredentialOptions: []v2.CapabilityDetailCredentialOption{
+			v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD,
+		},
+		PreferredCredentialOption: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD,
+	}, nil, nil
+}
+
+// CreateAccount provisions a new user in Grafana.
+func (u *userBuilder) CreateAccount(
+	ctx context.Context,
+	accountInfo *v2.AccountInfo,
+	credentialOptions *v2.CredentialOptions,
+) (connectorbuilder.CreateAccountResponse, []*v2.PlaintextData, annotations.Annotations, error) {
+	// Extract required information from account profile
+	l := ctxzap.Extract(ctx)
+
+	// Extract user information from profile
+	emailVal := accountInfo.Profile.GetFields()["email"]
+	if emailVal == nil || emailVal.GetStringValue() == "" {
+		return nil, nil, nil, fmt.Errorf("grafana-connector: email is required for account creation")
+	}
+	email := emailVal.GetStringValue()
+
+	// Get full name from profile or use email as fallback
+	name := email
+	nameVal := accountInfo.Profile.GetFields()["full_name"]
+	if nameVal != nil && nameVal.GetStringValue() != "" {
+		name = nameVal.GetStringValue()
+	}
+
+	// Use email as login if not provided
+	login := email
+	loginVal := accountInfo.Profile.GetFields()["login"]
+	if loginVal != nil && loginVal.GetStringValue() != "" {
+		login = loginVal.GetStringValue()
+	}
+
+	// Check if an organization ID was provided
+	var orgId int
+	orgIdVal := accountInfo.Profile.GetFields()["org_id"]
+	if orgIdVal != nil && orgIdVal.GetStringValue() != "" {
+		// Convert org_id string to int
+		var convErr error
+		orgId, convErr = strconv.Atoi(orgIdVal.GetStringValue())
+		if convErr != nil {
+			l.Error("Invalid organization ID format", zap.Error(convErr), zap.String("org_id", orgIdVal.GetStringValue()))
+			return nil, nil, nil, fmt.Errorf("grafana-connector: invalid organization ID: %w", convErr)
+		}
+	}
+
+	// Generate a random password
+	var password string
+	var err error
+
+	// Check for credential option
+	if credentialOptions.GetRandomPassword() != nil {
+		// Use the length from options or default to 16
+		length := int(credentialOptions.GetRandomPassword().GetLength())
+		if length <= 0 {
+			length = 16
+		}
+
+		// Generate a strong random password
+		password, err = generateRandomPassword(length)
+		if err != nil {
+			l.Error("Failed to generate random password", zap.Error(err))
+			return nil, nil, nil, fmt.Errorf("grafana-connector: failed to generate random password: %w", err)
+		}
+	} else {
+		// Default to random password if no option is specified
+		password, err = generateRandomPassword(16)
+		if err != nil {
+			l.Error("Failed to generate random password", zap.Error(err))
+			return nil, nil, nil, fmt.Errorf("grafana-connector: failed to generate random password: %w", err)
+		}
+	}
+
+	// Prepare request to create user
+	createUserReq := &grafana.CreateUserRequest{
+		Name:     name,
+		Email:    email,
+		Login:    login,
+		Password: password,
+	}
+
+	// Add organization ID if provided
+	if orgId > 0 {
+		createUserReq.OrgId = orgId
+	}
+
+	// Create the user in Grafana
+	user, err := u.client.CreateUser(ctx, createUserReq)
+	if err != nil {
+		l.Error("Failed to create user in Grafana", zap.Error(err), zap.String("email", email))
+		return nil, nil, nil, fmt.Errorf("grafana-connector: failed to create user: %w", err)
+	}
+
+	// Create a resource from the new user
+	resource, err := userResource(user)
+	if err != nil {
+		l.Error("Failed to create resource for new user", zap.Error(err))
+		return nil, nil, nil, fmt.Errorf("grafana-connector: failed to create resource for new user: %w", err)
+	}
+
+	// Return success result with the new user resource
+	successResult := &v2.CreateAccountResponse_SuccessResult{
+		Resource: resource,
+	}
+
+	// Return the password as plaintext data
+	plaintextData := []*v2.PlaintextData{
+		{
+			Bytes: []byte(password),
+		},
+	}
+
+	return successResult, plaintextData, nil, nil
 }

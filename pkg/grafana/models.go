@@ -54,3 +54,12 @@ type PaginationVars struct {
 	Size uint64
 	Page uint64
 }
+
+// CreateUserRequest represents the request body for creating a new user.
+type CreateUserRequest struct {
+	Name     string `json:"name"`
+	Email    string `json:"email"`
+	Login    string `json:"login"`
+	Password string `json:"password,omitempty"`
+	OrgId    int    `json:"orgId,omitempty"`
+}

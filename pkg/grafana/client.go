@@ -13,6 +13,7 @@ import (
 
 const (
 	ListUsersPath      = "/api/users"
+	CreateUserPath     = "/api/admin/users"
 	ListOrgsPath       = "/api/orgs"
 	ListUsersInOrgPath = "/api/orgs/%s/users"
 )
@@ -204,4 +205,23 @@ func (ubo UserByOrgResponse) ToUser() User {
 		LastSeenAtAge: ubo.LastSeenAtAge,
 		AuthLabels:    ubo.AuthLabels,
 	}
+}
+
+// CreateUser creates a new user in Grafana.
+func (c *Client) CreateUser(ctx context.Context, req *CreateUserRequest) (*User, error) {
+	var user User
+
+	err := c.doRequest(
+		ctx,
+		http.MethodPost,
+		c.buildResourceURL(CreateUserPath),
+		&user,
+		req,
+		nil,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("grafana-client: create user: %w", err)
+	}
+
+	return &user, nil
 }
