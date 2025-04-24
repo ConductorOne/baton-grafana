@@ -23,6 +23,14 @@ add-dep:
 	go mod tidy -v
 	go mod vendor
 
+.PHONY: test
+test:
+	go test ./...
+
+.PHONY: test-verbose
+test-verbose:
+	go test -v ./...
+
 .PHONY: lint
 lint:
 	golangci-lint run

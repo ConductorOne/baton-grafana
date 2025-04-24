@@ -254,6 +254,7 @@ func (u *userBuilder) CreateAccount(
 	// Return the password as plaintext data
 	plaintextData := []*v2.PlaintextData{
 		{
+			Name:  "password",
 			Bytes: []byte(password),
 		},
 	}
