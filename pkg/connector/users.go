@@ -17,6 +17,10 @@ import (
 	"go.uber.org/zap"
 )
 
+const (
+	charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+[]{}|;:,.<>?"
+)
+
 type userBuilder struct {
 	resourceType *v2.ResourceType
 	client       *grafana.Client
@@ -125,7 +129,6 @@ func newUserBuilder(client *grafana.Client) *userBuilder {
 
 // generateRandomPassword creates a secure random password.
 func generateRandomPassword(length int) (string, error) {
-	const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+[]{}|;:,.<>?"
 	password := make([]byte, length)
 
 	for i := 0; i < length; i++ {
