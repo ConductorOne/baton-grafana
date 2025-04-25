@@ -36,6 +36,50 @@ func (g *Grafana) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error) {
 	return &v2.ConnectorMetadata{
 		DisplayName: "Grafana",
 		Description: "Connector syncing Grafana organizations and users to Baton",
+		AccountCreationSchema: &v2.ConnectorAccountCreationSchema{
+			FieldMap: map[string]*v2.ConnectorAccountCreationSchema_Field{
+				"full_name": {
+					DisplayName: "Full Name",
+					Required:    true,
+					Description: "User's full name for display purposes",
+					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
+						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
+					},
+					Placeholder: "John Doe",
+					Order:       1,
+				},
+				"email": {
+					DisplayName: "Email",
+					Required:    true,
+					Description: "User's email address (used for login if username is not provided)",
+					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
+						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
+					},
+					Placeholder: "user@example.com",
+					Order:       2,
+				},
+				"login": {
+					DisplayName: "Username",
+					Required:    false,
+					Description: "Username for login (email will be used if not provided)",
+					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
+						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
+					},
+					Placeholder: "johndoe",
+					Order:       3,
+				},
+				"org_id": {
+					DisplayName: "Organization ID",
+					Required:    false,
+					Description: "ID of the organization to add user to",
+					Field: &v2.ConnectorAccountCreationSchema_Field_StringField{
+						StringField: &v2.ConnectorAccountCreationSchema_StringField{},
+					},
+					Placeholder: "1",
+					Order:       4,
+				},
+			},
+		},
 	}, nil
 }
 
