@@ -25,16 +25,16 @@
       },
       "capabilities": [
         "CAPABILITY_SYNC",
-        "CAPABILITY_CREATE_ACCOUNT"
+        "CAPABILITY_ACCOUNT_PROVISIONING"
       ]
     }
   ],
   "connectorCapabilities": [
     "CAPABILITY_SYNC",
-    "CAPABILITY_CREATE_ACCOUNT"
+    "CAPABILITY_ACCOUNT_PROVISIONING"
   ],
   "credentialDetails": {
-    "accountProvisioning": {
+    "capabilityAccountProvisioning": {
       "supportedCredentialOptions": [
         "CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD"
       ],
