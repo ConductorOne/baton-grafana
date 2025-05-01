@@ -147,6 +147,120 @@ func (o *orgBuilder) Grants(ctx context.Context, parentResource *v2.Resource, _ 
 	return grants, "", nil, nil
 }
 
+// Grant adds a user to an organization with the specified role.
+func (o *orgBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) (annotations.Annotations, error) {
+	// Verify the principal is a user
+	if principal.Id.ResourceType != resourceTypeUser.Id {
+		return nil, fmt.Errorf("grafana-connector: principal must be a user, got %s", principal.Id.ResourceType)
+	}
+
+	// Get the organization ID from the entitlement resource
+	orgID := entitlement.Resource.Id.Resource
+
+	// Get the role from the entitlement
+	role := entitlement.Id
+
+	// Verify the role is valid
+	if !slices.Contains(userRoles, role) {
+		return nil, fmt.Errorf("grafana-connector: invalid role %s", role)
+	}
+
+	// Convert user ID to int for API calls
+	userID, err := strconv.Atoi(principal.Id.Resource)
+	if err != nil {
+		return nil, fmt.Errorf("grafana-connector: invalid user ID %s: %w", principal.Id.Resource, err)
+	}
+
+	// Find the user in the organization's existing users
+	usersInOrg, err := o.client.ListUsersByOrg(ctx, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("grafana-connector: failed to list users in organization %s: %w", orgID, err)
+	}
+
+	// Check if user is already in the organization
+	for _, userInOrg := range usersInOrg {
+		if userInOrg.ID == userID {
+			// User already exists in org, check if they have the same role
+			if userInOrg.Role == role {
+				// User already has the requested role, return GrantAlreadyExists
+				return annotations.New(&v2.GrantAlreadyExists{}), nil
+			}
+
+			// User exists but with a different role
+			// Remove the user first to update their role
+			err = o.client.RemoveUserFromOrg(ctx, orgID, userID)
+			if err != nil {
+				return nil, fmt.Errorf("grafana-connector: failed to remove user %d from organization %s to update role: %w",
+					userID, orgID, err)
+			}
+			break
+		}
+	}
+
+	// Use the login or email from principal's display name
+	loginOrEmail := principal.DisplayName
+
+	// Create the request to add the user to the organization
+	req := &grafana.AddUserToOrgRequest{
+		LoginOrEmail: loginOrEmail,
+		Role:         role,
+	}
+
+	// Call the API to add the user to the organization
+	err = o.client.AddUserToOrg(ctx, orgID, req)
+	if err != nil {
+		return nil, fmt.Errorf("grafana-connector: failed to add user %s to organization %s with role %s: %w",
+			loginOrEmail, orgID, role, err)
+	}
+
+	return nil, nil
+}
+
+// Revoke removes a user from an organization.
+func (o *orgBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
+	// Verify the principal is a user
+	if grant.Principal.Id.ResourceType != resourceTypeUser.Id {
+		return nil, fmt.Errorf("grafana-connector: principal must be a user, got %s", grant.Principal.Id.ResourceType)
+	}
+
+	// Get the organization ID
+	orgID := grant.Entitlement.Resource.Id.Resource
+
+	// Get the user ID from the principal
+	userID, err := strconv.Atoi(grant.Principal.Id.Resource)
+	if err != nil {
+		return nil, fmt.Errorf("grafana-connector: invalid user ID %s: %w", grant.Principal.Id.Resource, err)
+	}
+
+	// Check if the user is in the organization
+	usersInOrg, err := o.client.ListUsersByOrg(ctx, orgID)
+	if err != nil {
+		return nil, fmt.Errorf("grafana-connector: failed to list users in organization %s: %w", orgID, err)
+	}
+
+	userExists := false
+	for _, userInOrg := range usersInOrg {
+		if userInOrg.ID == userID {
+			userExists = true
+			break
+		}
+	}
+
+	// If user is not in the organization, return GrantAlreadyRevoked
+	if !userExists {
+		return annotations.New(&v2.GrantAlreadyRevoked{}), nil
+	}
+
+	// Call the API to remove the user from the organization
+	err = o.client.RemoveUserFromOrg(ctx, orgID, userID)
+	if err != nil {
+		return nil, fmt.Errorf("grafana-connector: failed to remove user %d from organization %s: %w",
+			userID, orgID, err)
+	}
+
+	return nil, nil
+}
+
 func newOrgBuilder(client *grafana.Client) *orgBuilder {
 	return &orgBuilder{
 		resourceType: resourceTypeOrg,

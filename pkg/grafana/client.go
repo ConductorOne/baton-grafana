@@ -12,10 +12,12 @@ import (
 )
 
 const (
-	ListUsersPath      = "/api/users"
-	CreateUserPath     = "/api/admin/users"
-	ListOrgsPath       = "/api/orgs"
-	ListUsersInOrgPath = "/api/orgs/%s/users"
+	ListUsersPath         = "/api/users"
+	CreateUserPath        = "/api/admin/users"
+	ListOrgsPath          = "/api/orgs"
+	ListUsersInOrgPath    = "/api/orgs/%s/users"
+	AddUserToOrgPath      = "/api/orgs/%s/users"
+	RemoveUserFromOrgPath = "/api/orgs/%s/users/%d"
 )
 
 // NewClient initializes a new Grafana API client.
@@ -224,4 +226,38 @@ func (c *Client) CreateUser(ctx context.Context, req *CreateUserRequest) (*User,
 	}
 
 	return &user, nil
+}
+
+// AddUserToOrg adds a user to an organization with a specified role.
+func (c *Client) AddUserToOrg(ctx context.Context, orgID string, req *AddUserToOrgRequest) error {
+	err := c.doRequest(
+		ctx,
+		http.MethodPost,
+		c.buildResourceURL(AddUserToOrgPath, orgID),
+		nil,
+		req,
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("grafana-client: add user to org: %w", err)
+	}
+
+	return nil
+}
+
+// RemoveUserFromOrg removes a user from an organization.
+func (c *Client) RemoveUserFromOrg(ctx context.Context, orgID string, userID int) error {
+	err := c.doRequest(
+		ctx,
+		http.MethodDelete,
+		c.buildResourceURL(RemoveUserFromOrgPath, orgID, userID),
+		nil,
+		nil,
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("grafana-client: remove user from org: %w", err)
+	}
+
+	return nil
 }
