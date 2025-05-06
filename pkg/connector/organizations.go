@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 
 	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -157,8 +158,14 @@ func (o *orgBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlem
 	// Get the organization ID from the entitlement resource
 	orgID := entitlement.Resource.Id.Resource
 
-	// Get the role from the entitlement
-	role := entitlement.Id
+	// Parse the role from the entitlement ID, which is in format "resourceType:resourceId:permission"
+	parts := strings.Split(entitlement.Id, ":")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("grafana-connector: invalid entitlement ID format %s", entitlement.Id)
+	}
+
+	// The role is the last part of the entitlement ID
+	role := parts[2]
 
 	// Verify the role is valid
 	if !slices.Contains(userRoles, role) {
@@ -225,6 +232,12 @@ func (o *orgBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.A
 
 	// Get the organization ID
 	orgID := grant.Entitlement.Resource.Id.Resource
+
+	// Parse the role from the entitlement ID if needed for debugging
+	parts := strings.Split(grant.Entitlement.Id, ":")
+	if len(parts) != 3 {
+		return nil, fmt.Errorf("grafana-connector: invalid entitlement ID format %s", grant.Entitlement.Id)
+	}
 
 	// Get the user ID from the principal
 	userID, err := strconv.Atoi(grant.Principal.Id.Resource)
