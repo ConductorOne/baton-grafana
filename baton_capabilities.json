@@ -31,9 +31,9 @@
     }
   ],
   "connectorCapabilities": [
+    "CAPABILITY_PROVISION",
     "CAPABILITY_SYNC",
-    "CAPABILITY_ACCOUNT_PROVISIONING",
-    "CAPABILITY_PROVISION"
+    "CAPABILITY_ACCOUNT_PROVISIONING"
   ],
   "credentialDetails": {
     "capabilityAccountProvisioning": {
