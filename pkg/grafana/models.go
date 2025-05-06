@@ -63,3 +63,9 @@ type CreateUserRequest struct {
 	Password string `json:"password,omitempty"`
 	OrgId    int    `json:"orgId,omitempty"`
 }
+
+// AddUserToOrgRequest represents the request body for adding a user to an organization.
+type AddUserToOrgRequest struct {
+	LoginOrEmail string `json:"loginOrEmail"`
+	Role         string `json:"role"`
+}
