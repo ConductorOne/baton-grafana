@@ -192,6 +192,10 @@ func (c *Client) doRequest(
 		doOptions = append(doOptions, uhttp.WithJSONResponse(response))
 	}
 
+	// Add error response handling
+	var grafanaError GrafanaError
+	doOptions = append(doOptions, uhttp.WithErrorResponse(&grafanaError))
+
 	resp, err := c.httpClient.Do(req, doOptions...)
 	if err != nil {
 		// Add context logging to HTTP errors
@@ -287,7 +291,7 @@ func (c *Client) CreateUser(ctx context.Context, req *CreateUserRequest) (*User,
 	)
 	if err != nil {
 		// Check if this is a 412 Precondition Failed error, which likely means the user already exists
-		if strings.Contains(err.Error(), "412") {
+		if strings.Contains(err.Error(), fmt.Sprintf("%d", http.StatusPreconditionFailed)) {
 			return nil, fmt.Errorf("%w: %w", ErrUserAlreadyExists, err)
 		}
 		return nil, fmt.Errorf("grafana-client: create user: %w", err)

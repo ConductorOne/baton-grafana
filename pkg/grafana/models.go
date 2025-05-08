@@ -6,6 +6,20 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 )
 
+// GrafanaError represents an error response from the Grafana API.
+type GrafanaError struct {
+	ErrorMessage string `json:"message"`
+	Status       string `json:"status"`
+}
+
+// Message implements the uhttp.ErrorResponse interface.
+func (e *GrafanaError) Message() string {
+	if e.ErrorMessage != "" {
+		return e.ErrorMessage
+	}
+	return "Unknown error from Grafana API"
+}
+
 // Client represents a Grafana API client.
 type Client struct {
 	httpClient *uhttp.BaseHttpClient
