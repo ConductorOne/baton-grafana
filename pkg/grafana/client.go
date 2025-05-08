@@ -6,13 +6,16 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"strings"
 
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 )
 
 const (
 	ListUsersPath         = "/api/users"
+	GetUserByIDPath       = "/api/users/%d"
 	CreateUserPath        = "/api/admin/users"
 	ListOrgsPath          = "/api/orgs"
 	ListUsersInOrgPath    = "/api/orgs/%s/users"
@@ -154,6 +157,7 @@ func (c *Client) doRequest(
 	paginationVars *PaginationVars,
 ) error {
 	var err error
+	l := ctxzap.Extract(ctx)
 
 	reqOptions := []uhttp.RequestOption{
 		uhttp.WithContentType("application/json"),
@@ -186,10 +190,25 @@ func (c *Client) doRequest(
 
 	resp, err := c.httpClient.Do(req, doOptions...)
 	if err != nil {
+		// Add context logging to HTTP errors
+		if l != nil {
+			l.Debug("Grafana API error response",
+				zap.String("url", urlAddress.String()),
+				zap.String("method", method),
+				zap.Error(err))
+		}
 		return err
 	}
 
 	defer resp.Body.Close()
+
+	// Log the response status for debugging
+	if l != nil && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
+		l.Debug("Grafana API non-success response",
+			zap.String("url", urlAddress.String()),
+			zap.String("method", method),
+			zap.Int("status", resp.StatusCode))
+	}
 
 	return nil
 }
@@ -209,6 +228,47 @@ func (ubo UserByOrgResponse) ToUser() User {
 	}
 }
 
+// GetUserByID fetches a user by their ID.
+func (c *Client) GetUserByID(ctx context.Context, userID int) (*User, error) {
+	var user User
+
+	err := c.doRequest(
+		ctx,
+		http.MethodGet,
+		c.buildResourceURL(GetUserByIDPath, userID),
+		&user,
+		nil,
+		nil,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("grafana-client: get user by id: %w", err)
+	}
+
+	return &user, nil
+}
+
+// GetUserByLoginOrEmail searches for a user by login or email in the first page of results.
+func (c *Client) GetUserByLoginOrEmail(ctx context.Context, loginOrEmail string) (*User, error) {
+	// Use a small page size to minimize data transfer
+	paginationVars := &PaginationVars{
+		Size: 100,
+		Page: 0,
+	}
+
+	users, _, err := c.ListUsers(ctx, paginationVars)
+	if err != nil {
+		return nil, fmt.Errorf("grafana-client: get user by login or email: %w", err)
+	}
+
+	for i, user := range users {
+		if strings.EqualFold(user.Login, loginOrEmail) || strings.EqualFold(user.Email, loginOrEmail) {
+			return &users[i], nil
+		}
+	}
+
+	return nil, fmt.Errorf("grafana-client: user not found with login or email: %s", loginOrEmail)
+}
+
 // CreateUser creates a new user in Grafana.
 func (c *Client) CreateUser(ctx context.Context, req *CreateUserRequest) (*User, error) {
 	var user User
@@ -222,6 +282,10 @@ func (c *Client) CreateUser(ctx context.Context, req *CreateUserRequest) (*User,
 		nil,
 	)
 	if err != nil {
+		// Check if this is a 412 Precondition Failed error, which likely means the user already exists
+		if strings.Contains(err.Error(), "412") {
+			return nil, fmt.Errorf("grafana-client: user already exists: %w", err)
+		}
 		return nil, fmt.Errorf("grafana-client: create user: %w", err)
 	}
 
