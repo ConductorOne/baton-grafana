@@ -3,6 +3,7 @@ package grafana
 import (
 	"context"
 	"encoding/base64"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -22,6 +23,9 @@ const (
 	AddUserToOrgPath      = "/api/orgs/%s/users"
 	RemoveUserFromOrgPath = "/api/orgs/%s/users/%d"
 )
+
+// ErrUserAlreadyExists is returned when attempting to create a user that already exists in Grafana.
+var ErrUserAlreadyExists = errors.New("grafana-client: user already exists")
 
 // NewClient initializes a new Grafana API client.
 func NewClient(ctx context.Context, hostname, username, password string) (*Client, error) {
@@ -284,7 +288,7 @@ func (c *Client) CreateUser(ctx context.Context, req *CreateUserRequest) (*User,
 	if err != nil {
 		// Check if this is a 412 Precondition Failed error, which likely means the user already exists
 		if strings.Contains(err.Error(), "412") {
-			return nil, fmt.Errorf("grafana-client: user already exists: %w", err)
+			return nil, fmt.Errorf("%w: %w", ErrUserAlreadyExists, err)
 		}
 		return nil, fmt.Errorf("grafana-client: create user: %w", err)
 	}

@@ -3,10 +3,10 @@ package connector
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"math/big"
 	"strconv"
-	"strings"
 
 	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -239,8 +239,8 @@ func (u *userBuilder) CreateAccount(
 	// Create the user in Grafana
 	user, err := u.client.CreateUser(ctx, createUserReq)
 	if err != nil {
-		// Check if the error indicates the user already exists (412 Precondition Failed)
-		if strings.Contains(err.Error(), "user already exists") {
+		// Check if the error indicates the user already exists
+		if errors.Is(err, grafana.ErrUserAlreadyExists) {
 			l.Warn("User already exists in Grafana", zap.String("email", email), zap.String("login", login))
 
 			// Try to find the user directly by login or email
