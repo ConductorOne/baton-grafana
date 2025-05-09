@@ -3,6 +3,7 @@ package connector
 import (
 	"context"
 	"crypto/rand"
+	"errors"
 	"fmt"
 	"math/big"
 	"strconv"
@@ -238,6 +239,45 @@ func (u *userBuilder) CreateAccount(
 	// Create the user in Grafana
 	user, err := u.client.CreateUser(ctx, createUserReq)
 	if err != nil {
+		// Check if the error indicates the user already exists
+		if errors.Is(err, grafana.ErrUserAlreadyExists) {
+			l.Warn("User already exists in Grafana", zap.String("email", email), zap.String("login", login))
+
+			// Try to find the user directly by login or email
+			existingUser, findErr := u.client.GetUserByLoginOrEmail(ctx, login)
+			if findErr != nil {
+				// Try with email if login failed
+				if login != email {
+					existingUser, findErr = u.client.GetUserByLoginOrEmail(ctx, email)
+				}
+
+				if findErr != nil {
+					l.Error("Could not find existing user after 412 error",
+						zap.Error(findErr),
+						zap.String("email", email),
+						zap.String("login", login))
+
+					// Return the original error if we can't find the user
+					return nil, nil, nil, fmt.Errorf("grafana-connector: failed to create user and couldn't find existing user: %w", err)
+				}
+			}
+
+			// We found the user, create a resource for them
+			resource, resourceErr := userResource(existingUser)
+			if resourceErr != nil {
+				l.Error("Failed to create resource for existing user", zap.Error(resourceErr))
+				return nil, nil, nil, fmt.Errorf("grafana-connector: failed to create resource for existing user: %w", resourceErr)
+			}
+
+			successResult := &v2.CreateAccountResponse_SuccessResult{
+				Resource: resource,
+			}
+
+			// Return with GrantAlreadyExists annotation
+			return successResult, nil, nil, nil
+		}
+
+		// For other errors, log and return as usual
 		l.Error("Failed to create user in Grafana", zap.Error(err), zap.String("email", email))
 		return nil, nil, nil, fmt.Errorf("grafana-connector: failed to create user: %w", err)
 	}
