@@ -16,5 +16,3 @@
 # vendor/
 dist/
 
-
-**/.claude/settings.local.json
