@@ -184,7 +184,7 @@ func (o *orgBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlem
 	}
 
 	l := ctxzap.Extract(ctx)
-	l.Info("Adding user to organization", zap.Int("org_id", orgID), zap.Int("user_id", userID), zap.String("role", role))
+	l.Debug("Adding user to organization", zap.Int("org_id", orgID), zap.Int("user_id", userID), zap.String("role", role))
 
 	// Find the user in the organization's existing users
 	orgsForUser, err := o.client.ListOrgsForUser(ctx, userID)
@@ -201,7 +201,7 @@ func (o *orgBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlem
 				return annotations.New(&v2.GrantAlreadyExists{}), nil
 			}
 
-			l.Info("Removing user from organization", zap.Int("org_id", orgID), zap.Int("user_id", userID), zap.String("role", role))
+			l.Debug("Removing user from organization", zap.Int("org_id", orgID), zap.Int("user_id", userID), zap.String("role", role))
 			// User exists but with a different role
 			// Remove the user first to update their role
 			err = o.client.RemoveUserFromOrg(ctx, strconv.Itoa(orgForUser.OrgId), userID)
@@ -216,8 +216,6 @@ func (o *orgBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlem
 	if err != nil {
 		return nil, fmt.Errorf("grafana-connector: failed to get user by ID %d: %w", userID, err)
 	}
-
-	l.Info("Grafana user", zap.Any("user", grafanaUser))
 
 	// Create the request to add the user to the organization
 	req := &grafana.AddUserToOrgRequest{
@@ -260,7 +258,7 @@ func (o *orgBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.A
 	}
 
 	l := ctxzap.Extract(ctx)
-	l.Info("Removing user from organization", zap.Int("org_id", orgID), zap.Int("user_id", userID))
+	l.Debug("Removing user from organization", zap.Int("org_id", orgID), zap.Int("user_id", userID))
 
 	// Check if the user is in the organization
 	orgsForUser, err := o.client.ListOrgsForUser(ctx, userID)
