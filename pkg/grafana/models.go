@@ -34,6 +34,12 @@ type Organization struct {
 	Name string `json:"name"`
 }
 
+type UserOrgResponse struct {
+	OrgId   int    `json:"orgId"`
+	OrgName string `json:"name"`
+	Role    string `json:"role"`
+}
+
 type User struct {
 	ID            int      `json:"id"`
 	UID           string   `json:"uid"`

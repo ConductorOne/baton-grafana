@@ -14,6 +14,8 @@ import (
 	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 )
 
 const (
@@ -156,7 +158,10 @@ func (o *orgBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlem
 	}
 
 	// Get the organization ID from the entitlement resource
-	orgID := entitlement.Resource.Id.Resource
+	orgID, err := strconv.Atoi(entitlement.Resource.Id.Resource)
+	if err != nil {
+		return nil, fmt.Errorf("grafana-connector: invalid organization ID %s: %w", entitlement.Resource.Id.Resource, err)
+	}
 
 	// Parse the role from the entitlement ID, which is in format "resourceType:resourceId:permission"
 	parts := strings.Split(entitlement.Id, ":")
@@ -178,46 +183,52 @@ func (o *orgBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlem
 		return nil, fmt.Errorf("grafana-connector: invalid user ID %s: %w", principal.Id.Resource, err)
 	}
 
+	l := ctxzap.Extract(ctx)
+	l.Info("Adding user to organization", zap.Int("org_id", orgID), zap.Int("user_id", userID), zap.String("role", role))
+
 	// Find the user in the organization's existing users
-	usersInOrg, err := o.client.ListUsersByOrg(ctx, orgID)
+	orgsForUser, err := o.client.ListOrgsForUser(ctx, userID)
 	if err != nil {
-		return nil, fmt.Errorf("grafana-connector: failed to list users in organization %s: %w", orgID, err)
+		return nil, fmt.Errorf("grafana-connector: failed to list users in organization %d: %w", orgID, err)
 	}
 
 	// Check if user is already in the organization
-	for _, userInOrg := range usersInOrg {
-		if userInOrg.ID == userID {
+	for _, orgForUser := range orgsForUser {
+		if orgForUser.OrgId == orgID {
 			// User already exists in org, check if they have the same role
-			if userInOrg.Role == role {
+			if orgForUser.Role == role {
 				// User already has the requested role, return GrantAlreadyExists
 				return annotations.New(&v2.GrantAlreadyExists{}), nil
 			}
 
+			l.Info("Removing user from organization", zap.Int("org_id", orgID), zap.Int("user_id", userID), zap.String("role", role))
 			// User exists but with a different role
 			// Remove the user first to update their role
-			err = o.client.RemoveUserFromOrg(ctx, orgID, userID)
+			err = o.client.RemoveUserFromOrg(ctx, strconv.Itoa(orgForUser.OrgId), userID)
 			if err != nil {
-				return nil, fmt.Errorf("grafana-connector: failed to remove user %d from organization %s to update role: %w",
-					userID, orgID, err)
+				return nil, fmt.Errorf("grafana-connector: failed to remove user %d from organization %d to update role: %w", userID, orgID, err)
 			}
 			break
 		}
 	}
 
-	// Use the login or email from principal's display name
-	loginOrEmail := principal.DisplayName
+	grafanaUser, err := o.client.GetUserByID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("grafana-connector: failed to get user by ID %d: %w", userID, err)
+	}
+
+	l.Info("Grafana user", zap.Any("user", grafanaUser))
 
 	// Create the request to add the user to the organization
 	req := &grafana.AddUserToOrgRequest{
-		LoginOrEmail: loginOrEmail,
+		LoginOrEmail: grafanaUser.Login,
 		Role:         role,
 	}
 
 	// Call the API to add the user to the organization
-	err = o.client.AddUserToOrg(ctx, orgID, req)
+	err = o.client.AddUserToOrg(ctx, strconv.Itoa(orgID), req)
 	if err != nil {
-		return nil, fmt.Errorf("grafana-connector: failed to add user %s to organization %s with role %s: %w",
-			loginOrEmail, orgID, role, err)
+		return nil, fmt.Errorf("grafana-connector: failed to add user %s to organization %d with role %s: %w", grafanaUser.Login, orgID, role, err)
 	}
 
 	return nil, nil
@@ -231,7 +242,10 @@ func (o *orgBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.A
 	}
 
 	// Get the organization ID
-	orgID := grant.Entitlement.Resource.Id.Resource
+	orgID, err := strconv.Atoi(grant.Entitlement.Resource.Id.Resource)
+	if err != nil {
+		return nil, fmt.Errorf("grafana-connector: invalid organization ID %s: %w", grant.Entitlement.Resource.Id.Resource, err)
+	}
 
 	// Parse the role from the entitlement ID if needed for debugging
 	parts := strings.Split(grant.Entitlement.Id, ":")
@@ -245,29 +259,32 @@ func (o *orgBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.A
 		return nil, fmt.Errorf("grafana-connector: invalid user ID %s: %w", grant.Principal.Id.Resource, err)
 	}
 
+	l := ctxzap.Extract(ctx)
+	l.Info("Removing user from organization", zap.Int("org_id", orgID), zap.Int("user_id", userID))
+
 	// Check if the user is in the organization
-	usersInOrg, err := o.client.ListUsersByOrg(ctx, orgID)
+	orgsForUser, err := o.client.ListOrgsForUser(ctx, userID)
 	if err != nil {
-		return nil, fmt.Errorf("grafana-connector: failed to list users in organization %s: %w", orgID, err)
+		return nil, fmt.Errorf("grafana-connector: failed to list users in organization %d: %w", orgID, err)
 	}
 
-	userExists := false
-	for _, userInOrg := range usersInOrg {
-		if userInOrg.ID == userID {
-			userExists = true
+	userHasOrg := false
+	for _, orgForUser := range orgsForUser {
+		if orgForUser.OrgId == orgID {
+			userHasOrg = true
 			break
 		}
 	}
 
 	// If user is not in the organization, return GrantAlreadyRevoked
-	if !userExists {
+	if !userHasOrg {
 		return annotations.New(&v2.GrantAlreadyRevoked{}), nil
 	}
 
 	// Call the API to remove the user from the organization
-	err = o.client.RemoveUserFromOrg(ctx, orgID, userID)
+	err = o.client.RemoveUserFromOrg(ctx, grant.Entitlement.Resource.Id.Resource, userID)
 	if err != nil {
-		return nil, fmt.Errorf("grafana-connector: failed to remove user %d from organization %s: %w",
+		return nil, fmt.Errorf("grafana-connector: failed to remove user %d from organization %d: %w",
 			userID, orgID, err)
 	}
 

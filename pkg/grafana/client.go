@@ -22,6 +22,7 @@ const (
 	ListUsersInOrgPath    = "/api/orgs/%s/users"
 	AddUserToOrgPath      = "/api/orgs/%s/users"
 	RemoveUserFromOrgPath = "/api/orgs/%s/users/%d"
+	OrgsForUserPath       = "/api/users/%d/orgs"
 )
 
 // ErrUserAlreadyExists is returned when attempting to create a user that already exists in Grafana.
@@ -98,6 +99,18 @@ func (c *Client) ListOrganizations(ctx context.Context, pVars *PaginationVars) (
 	}
 
 	return organizationsResponse, nextPage, nil
+}
+
+// ListOrgsForUser fetches all organizations for a given Grafana user.
+func (c *Client) ListOrgsForUser(ctx context.Context, userID int) ([]UserByOrgResponse, error) {
+	var orgsResponse []UserByOrgResponse
+
+	err := c.doRequest(ctx, http.MethodGet, c.buildResourceURL(OrgsForUserPath, userID), &orgsResponse, nil, nil)
+	if err != nil {
+		return nil, err
+	}
+
+	return orgsResponse, nil
 }
 
 // ListUsersByOrg fetches all users in a given Grafana organization.
