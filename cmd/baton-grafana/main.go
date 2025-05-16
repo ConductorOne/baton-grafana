@@ -5,12 +5,12 @@ import (
 	"fmt"
 	"os"
 
+	cfg "github.com/conductorone/baton-grafana/pkg/config"
 	"github.com/conductorone/baton-grafana/pkg/connector"
 	configschema "github.com/conductorone/baton-sdk/pkg/config"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/types"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
-	"github.com/spf13/viper"
 	"go.uber.org/zap"
 )
 
@@ -19,7 +19,7 @@ var version = "dev"
 func main() {
 	ctx := context.Background()
 
-	_, cmd, err := configschema.DefineConfiguration(ctx, "baton-grafana", getConnector, cfg)
+	_, cmd, err := configschema.DefineConfiguration(ctx, "baton-grafana", getConnector, cfg.Config)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
@@ -34,12 +34,12 @@ func main() {
 	}
 }
 
-func getConnector(ctx context.Context, v *viper.Viper) (types.ConnectorServer, error) {
+func getConnector(ctx context.Context, gc *cfg.Grafana) (types.ConnectorServer, error) {
 	l := ctxzap.Extract(ctx)
 
-	hostname := v.GetString(Hostname.FieldName)
-	username := v.GetString(Username.FieldName)
-	password := v.GetString(Password.FieldName)
+	hostname := gc.Hostname
+	username := gc.Username
+	password := gc.Password
 
 	cb, err := connector.New(ctx, hostname, username, password)
 	if err != nil {
