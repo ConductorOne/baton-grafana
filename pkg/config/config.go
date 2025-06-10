@@ -2,34 +2,31 @@ package config
 
 import (
 	"github.com/conductorone/baton-sdk/pkg/field"
-	"github.com/spf13/viper"
 )
 
 var (
-	Hostname = field.StringField("hostname", field.WithDescription("The Grafana hostname used to connect to the Grafana API"), field.WithDefaultValue("http://localhost:3000"))
-	Username = field.StringField("username", field.WithRequired(true), field.WithDescription("The Grafana username used to connect to the Grafana API."))
-	Password = field.StringField("password", field.WithRequired(true), field.WithDescription("The Grafana password used to connect to the Grafana API."))
-
-	// FieldRelationships defines relationships between the fields listed in
-	// Config that can be automatically validated. For example, a
-	// username and password can be required together, or an access token can be
-	// marked as mutually exclusive from the username password pair.
-	FieldRelationships = []field.SchemaFieldRelationship{
-		field.FieldsRequiredTogether(Username, Password),
-	}
+	Hostname = field.StringField("hostname",
+		field.WithDisplayName("Instance URL"),
+		field.WithDescription("The Grafana hostname used to connect to the Grafana API"),
+		field.WithDefaultValue("http://localhost:3000"))
+	Username = field.StringField("username",
+		field.WithRequired(true),
+		field.WithDisplayName("Username"),
+		field.WithDescription("The Grafana username used to connect to the Grafana API."))
+	Password = field.StringField("password",
+		field.WithRequired(true),
+		field.WithIsSecret(true),
+		field.WithDisplayName("Password"),
+		field.WithDescription("The Grafana password used to connect to the Grafana API."))
 
 	//go:generate go run ./gen
-	Config = field.NewConfiguration([]field.SchemaField{
-		Hostname,
-		Username,
-		Password,
-	}, field.WithConstraints(FieldRelationships...))
+	Config = field.NewConfiguration(
+		[]field.SchemaField{
+			Hostname,
+			Username,
+			Password,
+		},
+		field.WithConnectorDisplayName("Grafana"),
+		field.WithHelpUrl("/docs/baton/grafana"),
+		field.WithIconUrl("/static/app-icons/grafana.svg"))
 )
-
-// ValidateConfig is run after the configuration is loaded, and should return an
-// error if it isn't valid. Implementing this function is optional, it only
-// needs to perform extra validations that cannot be encoded with configuration
-// parameters.
-func ValidateConfig(v *viper.Viper) error {
-	return nil
-}
