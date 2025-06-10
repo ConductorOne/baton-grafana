@@ -2,6 +2,7 @@
   "fields": [
     {
       "name": "hostname",
+      "displayName": "Instance URL",
       "description": "The Grafana hostname used to connect to the Grafana API",
       "stringField": {
         "defaultValue": "http://localhost:3000"
@@ -53,8 +54,10 @@
     },
     {
       "name": "password",
+      "displayName": "Password",
       "description": "The Grafana password used to connect to the Grafana API.",
       "isRequired": true,
+      "isSecret": true,
       "stringField": {
         "rules": {
           "isRequired": true
@@ -63,6 +66,7 @@
     },
     {
       "name": "username",
+      "displayName": "Username",
       "description": "The Grafana username used to connect to the Grafana API.",
       "isRequired": true,
       "stringField": {
@@ -72,13 +76,7 @@
       }
     }
   ],
-  "constraints": [
-    {
-      "kind": "CONSTRAINT_KIND_REQUIRED_TOGETHER",
-      "fieldNames": [
-        "username",
-        "password"
-      ]
-    }
-  ]
+  "displayName": "Grafana",
+  "helpUrl": "/docs/baton/grafana",
+  "iconUrl": "/static/app-icons/grafana.svg"
 }
