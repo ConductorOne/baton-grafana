@@ -23,7 +23,7 @@ var (
 		Hostname,
 		Username,
 		Password,
-	}, FieldRelationships...)
+	}, field.WithConstraints(FieldRelationships...))
 )
 
 // ValidateConfig is run after the configuration is loaded, and should return an
