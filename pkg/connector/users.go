@@ -304,3 +304,11 @@ func (u *userBuilder) CreateAccount(
 
 	return successResult, plaintextData, nil, nil
 }
+
+func (o *userBuilder) Delete(ctx context.Context, resourceId *v2.ResourceId) (annotations.Annotations, error) {
+	err := o.client.DeleteUser(ctx, resourceId.Resource)
+	if err != nil {
+		return nil, fmt.Errorf("baton-databricks: failed to delete user: %w", err)
+	}
+	return nil, nil
+}

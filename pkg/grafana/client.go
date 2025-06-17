@@ -18,6 +18,7 @@ const (
 	ListUsersPath         = "/api/users"
 	GetUserByIDPath       = "/api/users/%d"
 	CreateUserPath        = "/api/admin/users"
+	DeleteUserPath        = "/api/admin/users/%s"
 	ListOrgsPath          = "/api/orgs"
 	ListUsersInOrgPath    = "/api/orgs/%s/users"
 	AddUserToOrgPath      = "/api/orgs/%s/users"
@@ -311,6 +312,22 @@ func (c *Client) CreateUser(ctx context.Context, req *CreateUserRequest) (*User,
 	}
 
 	return &user, nil
+}
+
+func (c *Client) DeleteUser(ctx context.Context, userId string) error {
+	err := c.doRequest(
+		ctx,
+		http.MethodDelete,
+		c.buildResourceURL(DeleteUserPath, userId),
+		nil,
+		nil,
+		nil,
+	)
+	if err != nil {
+		return fmt.Errorf("grafana-client: delete user: %w", err)
+	}
+
+	return nil
 }
 
 // AddUserToOrg adds a user to an organization with a specified role.
