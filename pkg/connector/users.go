@@ -2,30 +2,27 @@ package connector
 
 import (
 	"context"
-	"crypto/rand"
 	"errors"
 	"fmt"
-	"math/big"
 	"strconv"
 
 	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
+	"github.com/conductorone/baton-sdk/pkg/crypto"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 )
 
-const (
-	charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()-_=+[]{}|;:,.<>?"
-)
-
 type userBuilder struct {
 	resourceType *v2.ResourceType
 	client       *grafana.Client
 }
+
+var _ connectorbuilder.AccountManager = &userBuilder{}
 
 // ResourceType returns the Baton resource type for users.
 func (u *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
@@ -128,26 +125,12 @@ func newUserBuilder(client *grafana.Client) *userBuilder {
 	}
 }
 
-// generateRandomPassword creates a secure random password.
-func generateRandomPassword(length int) (string, error) {
-	password := make([]byte, length)
-
-	for i := 0; i < length; i++ {
-		n, err := rand.Int(rand.Reader, big.NewInt(int64(len(charset))))
-		if err != nil {
-			return "", err
-		}
-		password[i] = charset[n.Int64()]
-	}
-
-	return string(password), nil
-}
-
 // CreateAccountCapabilityDetails indicates the credential options this connector supports.
 func (u *userBuilder) CreateAccountCapabilityDetails(ctx context.Context) (*v2.CredentialDetailsAccountProvisioning, annotations.Annotations, error) {
 	return &v2.CredentialDetailsAccountProvisioning{
 		SupportedCredentialOptions: []v2.CapabilityDetailCredentialOption{
 			v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD,
+			v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_ENCRYPTED_PASSWORD,
 		},
 		PreferredCredentialOption: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_RANDOM_PASSWORD,
 	}, nil, nil
@@ -157,7 +140,7 @@ func (u *userBuilder) CreateAccountCapabilityDetails(ctx context.Context) (*v2.C
 func (u *userBuilder) CreateAccount(
 	ctx context.Context,
 	accountInfo *v2.AccountInfo,
-	credentialOptions *v2.CredentialOptions,
+	credentialOptions *v2.LocalCredentialOptions,
 ) (connectorbuilder.CreateAccountResponse, []*v2.PlaintextData, annotations.Annotations, error) {
 	// Extract required information from account profile
 	l := ctxzap.Extract(ctx)
@@ -196,31 +179,10 @@ func (u *userBuilder) CreateAccount(
 		}
 	}
 
-	// Generate a random password
-	var password string
-	var err error
-
-	// Check for credential option
-	if credentialOptions.GetRandomPassword() != nil {
-		// Use the length from options or default to 16
-		length := int(credentialOptions.GetRandomPassword().GetLength())
-		if length <= 0 {
-			length = 16
-		}
-
-		// Generate a strong random password
-		password, err = generateRandomPassword(length)
-		if err != nil {
-			l.Error("Failed to generate random password", zap.Error(err))
-			return nil, nil, nil, fmt.Errorf("grafana-connector: failed to generate random password: %w", err)
-		}
-	} else {
-		// Default to random password if no option is specified
-		password, err = generateRandomPassword(16)
-		if err != nil {
-			l.Error("Failed to generate random password", zap.Error(err))
-			return nil, nil, nil, fmt.Errorf("grafana-connector: failed to generate random password: %w", err)
-		}
+	password, err := crypto.GeneratePassword(ctx, credentialOptions)
+	if err != nil {
+		l.Error("Failed to generate random password", zap.Error(err))
+		return nil, nil, nil, fmt.Errorf("grafana-connector: failed to generate random password: %w", err)
 	}
 
 	// Prepare request to create user
