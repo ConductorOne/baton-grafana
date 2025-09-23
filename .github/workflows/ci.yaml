@@ -77,6 +77,16 @@ jobs:
             fi
             sleep 5
           done
+      - name: Create a second admin user
+        run: |
+          curl --fail-with-body -X POST http://admin:admin@localhost:3000/api/admin/users \
+            -H "Content-Type: application/json" \
+            -d '{"name":"testUser","email":"testUser@example.com","password":"testUser","orgId":1}'
+      - name: Grant admin to testUser
+        run: |
+          curl --fail-with-body -X PUT http://admin:admin@localhost:3000/api/admin/users/2/permissions \
+            -H "Content-Type: application/json" \
+            -d '{"isGrafanaAdmin": true}'
       - name: Build baton-grafana
         run: go build -o baton-grafana ./cmd/baton-grafana
       - name: Test sync
@@ -87,5 +97,5 @@ jobs:
         with:
           connector: ./baton-grafana
           baton-entitlement: "org:1:Admin"
-          baton-principal: "1"
+          baton-principal: "2"
           baton-principal-type: "user"
