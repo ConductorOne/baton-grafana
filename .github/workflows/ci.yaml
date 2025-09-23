@@ -7,16 +7,14 @@ jobs:
   go-lint:
     runs-on: ubuntu-latest
     steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
       - name: Install Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.23.x
-
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+          go-version-file: go.mod
       - name: Run linters
-        uses: golangci/golangci-lint-action@v5
+        uses: golangci/golangci-lint-action@v8
         with:
           version: latest
           args: --timeout=3m
@@ -24,22 +22,18 @@ jobs:
   go-test:
     strategy:
       matrix:
-        go-version: [1.23.x]
         platform: [ubuntu-latest]
     runs-on: ${{ matrix.platform }}
     steps:
-      - name: Install Go
+      - name: Checkout code
         if: success()
+        uses: actions/checkout@v4
+      - name: Install Go
         uses: actions/setup-go@v5
         with:
-          go-version: ${{ matrix.go-version }}
-
-      - name: Checkout code
-        uses: actions/checkout@v4
-
+          go-version-file: go.mod
       - name: go tests
         run: (set -o pipefail && go test -v -covermode=count -json ./... | tee test.json)
-
       - name: annotate go tests
         if: always()
         uses: guyarb/golang-test-annotations@v0.5.1
@@ -65,20 +59,13 @@ jobs:
     # 2) Environment variables
     env:
       BATON_LOG_LEVEL: debug
-      # The following represent your test data for baton grants
-      CONNECTOR_ENTITLEMENT: "org:1:Admin"
-      CONNECTOR_PRINCIPAL: "1"
-      CONNECTOR_PRINCIPAL_TYPE: "user"
-
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
-
       - name: Install Go
         uses: actions/setup-go@v5
         with:
-          go-version: 1.23.x
-
+          go-version-file: go.mod
       # (Optional) Wait for Grafana explicitly:
       - name: Wait for Grafana
         run: |
@@ -90,23 +77,15 @@ jobs:
             fi
             sleep 5
           done
-
       - name: Build baton-grafana
         run: go build -o baton-grafana ./cmd/baton-grafana
-
-      # Run baton-grafana with admin credentials from the Grafana container
-      - name: Run baton-grafana
-        run: ./baton-grafana --username=admin --password=admin --file=sync.c1z
-
-      - name: Install baton
-        run: |
-          ./scripts/get-baton.sh
-          sudo mv baton /usr/local/bin
-
-      - name: Check for grant before revoking
-        run: |
-          baton grants \
-            --entitlement="${{ env.CONNECTOR_ENTITLEMENT }}" \
-            --output-format=json \
-          | jq --exit-status \
-            ".grants[].principal.id.resource == \"${{ env.CONNECTOR_PRINCIPAL }}\""
+      - name: Test sync
+        env:
+          BATON_USERNAME: admin
+          BATON_PASSWORD: admin
+        uses: ConductorOne/github-workflows/actions/sync-test@v2
+        with:
+          connector: ./baton-grafana
+          baton-entitlement: "org:1:Admin"
+          baton-principal: "1"
+          baton-principal-type: "user"
