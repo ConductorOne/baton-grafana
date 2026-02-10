@@ -1,11 +1,11 @@
 ![Baton Logo](./baton-logo.png)
 
-# baton-grafana  
-[![Go Reference](https://pkg.go.dev/badge/github.com/conductorone/baton-grafana.svg)](https://pkg.go.dev/github.com/conductorone/baton-grafana)  
-![main ci](https://github.com/conductorone/baton-grafana/actions/workflows/main.yaml/badge.svg)
+# baton-grafana
+[![Go Reference](https://pkg.go.dev/badge/github.com/conductorone/baton-grafana.svg)](https://pkg.go.dev/github.com/conductorone/baton-grafana)
+![ci](https://github.com/conductorone/baton-grafana/actions/workflows/ci.yaml/badge.svg) ![verify](https://github.com/conductorone/baton-grafana/actions/workflows/verify.yaml/badge.svg)
 
-`baton-grafana` is a connector built using the [Baton SDK](https://github.com/conductorone/baton-sdk).  
-It enables seamless integration with **Grafana** for retrieving users, organizations, and access permissions.  
+`baton-grafana` is a connector built using the [Baton SDK](https://github.com/conductorone/baton-sdk).
+It enables seamless integration with **Grafana** for retrieving users, organizations, and access permissions.
 
 Check out [Baton](https://github.com/conductorone/baton) to learn more about the project.
 
