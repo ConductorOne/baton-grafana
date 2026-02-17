@@ -18,6 +18,7 @@ jobs:
     # 2) Environment variables
     env:
       BATON_LOG_LEVEL: debug
+      BATON_HOSTNAME: http://localhost:3000
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
