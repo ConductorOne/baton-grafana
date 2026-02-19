@@ -53,7 +53,8 @@ jobs:
         env:
           BATON_USERNAME: admin
           BATON_PASSWORD: admin
-        uses: ConductorOne/github-workflows/actions/sync-test@v2
+          BATON_HOSTNAME: http://localhost:3000
+        uses: ConductorOne/github-workflows/actions/sync-test@v4
         with:
           connector: ./baton-grafana
           baton-entitlement: "org:1:Admin"
