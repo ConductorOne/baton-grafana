@@ -74,7 +74,7 @@ You can install `baton-grafana` using **Homebrew**, **Docker**, or directly from
 
 | Parameter     | Required | Default                 | Description                                       |
 |---------------|----------|-------------------------|---------------------------------------------------|
-| --hostname    | No       | `http://localhost:3000` | The Grafana server hostname.                      |
+| --hostname    | Yes      | -                       | The Grafana instance URL (e.g., `https://grafana.example.com`). |
 | --username    | Yes      | -                       | Grafana admin username.                           |
 | --password    | Yes      | -                       | Grafana admin password.                           |
 
@@ -150,7 +150,7 @@ Below is a complete list of supported flags along with their corresponding envir
 | **-v, --version**    | Show version information                                                                   | -                      | -                  |
 | **--client-id**      | The client ID used to authenticate with ConductorOne                                       | `BATON_CLIENT_ID`      | -                  |
 | **--client-secret**  | The client secret used to authenticate with ConductorOne                                   | `BATON_CLIENT_SECRET`  | -                  |
-| **--hostname**       | Grafana hostname (e.g., `http://localhost:3000`)                                           | `BATON_HOSTNAME`       | `http://localhost:3000`  |
+| **--hostname**       | Grafana instance URL (e.g., `https://grafana.example.com`)                                 | `BATON_HOSTNAME`       | -                  |
 | **--log-format**     | The output format for logs: `json` or `console`                                            | `BATON_LOG_FORMAT`     | `json`             |
 | **--log-level**      | The log level: `debug`, `info`, `warn`, `error`                                            | `BATON_LOG_LEVEL`      | `info`             |
 | **--password**       | Grafana admin password                                                                     | `BATON_PASSWORD`       | -                  |

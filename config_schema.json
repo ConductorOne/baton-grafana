@@ -95,9 +95,13 @@
     {
       "name": "hostname",
       "displayName": "Instance URL",
-      "description": "The Grafana hostname used to connect to the Grafana API",
+      "description": "The Grafana instance URL used to connect to the Grafana API.",
+      "placeholder": "https://grafana.example.com",
+      "isRequired": true,
       "stringField": {
-        "defaultValue": "http://localhost:3000"
+        "rules": {
+          "isRequired": true
+        }
       }
     },
     {

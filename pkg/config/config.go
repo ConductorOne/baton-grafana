@@ -6,9 +6,10 @@ import (
 
 var (
 	Hostname = field.StringField("hostname",
+		field.WithRequired(true),
 		field.WithDisplayName("Instance URL"),
-		field.WithDescription("The Grafana hostname used to connect to the Grafana API"),
-		field.WithDefaultValue("http://localhost:3000"))
+		field.WithDescription("The Grafana instance URL used to connect to the Grafana API."),
+		field.WithPlaceholder("https://grafana.example.com"))
 	Username = field.StringField("username",
 		field.WithRequired(true),
 		field.WithDisplayName("Username"),
