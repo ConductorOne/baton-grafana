@@ -7,6 +7,7 @@ type Grafana struct {
 	Hostname string `mapstructure:"hostname"`
 	Username string `mapstructure:"username"`
 	Password string `mapstructure:"password"`
+	APIToken string `mapstructure:"api-token"`
 }
 
 func (c* Grafana) findFieldByTag(tagValue string) (any, bool) {

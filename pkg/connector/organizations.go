@@ -31,7 +31,7 @@ type orgBuilder struct {
 	client       *grafana.Client
 }
 
-func (o *orgBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
+func (o *orgBuilder) ResourceType(_ context.Context) *v2.ResourceType {
 	return resourceTypeOrg
 }
 
@@ -52,6 +52,30 @@ func orgResource(org grafana.Organization) (*v2.Resource, error) {
 
 // List returns all the organizations.
 func (o *orgBuilder) List(ctx context.Context, _ *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
+	if o.client.IsCloud() {
+		return o.listCloud(ctx)
+	}
+	return o.listSelfHosted(ctx, pToken)
+}
+
+// listCloud fetches only the current org (Cloud mode — single org scope).
+// ID stability: org.ID from GET /api/org is the same numeric Grafana org ID as from GET /api/orgs.
+func (o *orgBuilder) listCloud(ctx context.Context) ([]*v2.Resource, string, annotations.Annotations, error) {
+	org, err := o.client.GetCurrentOrg(ctx)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("grafana-connector: cloud: failed to get current org: %w", err)
+	}
+
+	resource, err := orgResource(*org)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("grafana-connector: cloud: failed to create org resource: %w", err)
+	}
+
+	return []*v2.Resource{resource}, "", nil, nil
+}
+
+// listSelfHosted is the original List logic for self-hosted Grafana — unchanged.
+func (o *orgBuilder) listSelfHosted(ctx context.Context, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
 	// Parse pagination token. If Token is an empty string, the function returns 0.
 	bag, page, err := parsePageToken(pToken, &v2.ResourceId{ResourceType: resourceTypeOrg.Id})
 	if err != nil {
@@ -121,15 +145,28 @@ func (o *orgBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *p
 
 // Grants returns a slice of grants for each user and their set role under organization.
 func (o *orgBuilder) Grants(ctx context.Context, parentResource *v2.Resource, _ *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
-	// Fetch users under the organization (The endpoint used in this method does not support pagination.)
-	usersByOrgResponse, err := o.client.ListUsersByOrg(ctx, parentResource.Id.Resource)
-	if err != nil {
-		return nil, "", nil, fmt.Errorf("grafana-connector: failed to list users under organization %s: %w", parentResource.Id.Resource, err)
+	var usersByOrgResponse []grafana.UserByOrgResponse
+	var err error
+
+	if o.client.IsCloud() {
+		// Cloud mode: GET /api/org/users — no orgID param needed, no pagination.
+		// ID stability: UserByOrgResponse.ID (json:"userId") is the same numeric Grafana user ID
+		// as User.ID from the self-hosted path. Grant IDs are therefore unchanged.
+		usersByOrgResponse, err = o.client.ListCurrentOrgUsers(ctx)
+		if err != nil {
+			return nil, "", nil, fmt.Errorf("grafana-connector: cloud: failed to list current org users: %w", err)
+		}
+	} else {
+		// Self-hosted mode: original behavior unchanged
+		usersByOrgResponse, err = o.client.ListUsersByOrg(ctx, parentResource.Id.Resource)
+		if err != nil {
+			return nil, "", nil, fmt.Errorf("grafana-connector: failed to list users under organization %s: %w", parentResource.Id.Resource, err)
+		}
 	}
 
 	grants := make([]*v2.Grant, 0, len(usersByOrgResponse))
 
-	// Iterate through users and create grants
+	// Iterate through users and create grants — identical for both modes
 	for _, userByOrg := range usersByOrgResponse {
 		// Skip users with invalid roles
 		if !slices.Contains(userRoles, userByOrg.Role) {
@@ -152,6 +189,8 @@ func (o *orgBuilder) Grants(ctx context.Context, parentResource *v2.Resource, _ 
 
 // Grant adds a user to an organization with the specified role.
 func (o *orgBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) (annotations.Annotations, error) {
+	l := ctxzap.Extract(ctx)
+	
 	// Verify the principal is a user
 	if principal.Id.ResourceType != resourceTypeUser.Id {
 		return nil, fmt.Errorf("grafana-connector: principal must be a user, got %s", principal.Id.ResourceType)
@@ -183,7 +222,75 @@ func (o *orgBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlem
 		return nil, fmt.Errorf("grafana-connector: invalid user ID %s: %w", principal.Id.Resource, err)
 	}
 
-	l := ctxzap.Extract(ctx)
+	if o.client.IsCloud() {
+		return o.grantCloud(ctx, l, principal, userID, orgID, role)
+	}
+	return o.grantSelfHosted(ctx, l, userID, orgID, role)
+}
+
+// grantCloud handles Grant in Cloud mode.
+// Strategy:
+//  1. List current org users to check membership.
+//  2. Same role → GrantAlreadyExists.
+//  3. Different role → PATCH (no remove+re-add needed, more efficient).
+//  4. Not in org → POST /api/org/users using email from UserTrait (avoids
+//     GET /api/users/:id which is forbidden in Cloud mode).
+func (o *orgBuilder) grantCloud(ctx context.Context, l *zap.Logger, principal *v2.Resource, userID, orgID int, role string) (annotations.Annotations, error) {
+	l.Debug("Cloud mode: granting org membership", zap.Int("user_id", userID), zap.Int("org_id", orgID), zap.String("role", role))
+
+	currentUsers, err := o.client.ListCurrentOrgUsers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("grafana-connector: cloud: failed to list org users for grant: %w", err)
+	}
+
+	for _, cu := range currentUsers {
+		if cu.ID == userID {
+			if cu.Role == role {
+				// Already has the requested role
+				return annotations.New(&v2.GrantAlreadyExists{}), nil
+			}
+			// Role differs — update via PATCH (single call, no remove+re-add)
+			l.Debug("Cloud mode: updating user role via PATCH", zap.Int("user_id", userID), zap.String("new_role", role))
+			if err = o.client.UpdateOrgUserRole(ctx, userID, role); err != nil {
+				return nil, fmt.Errorf("grafana-connector: cloud: failed to update role for user %d: %w", userID, err)
+			}
+			return nil, nil
+		}
+	}
+
+	// User not in org — retrieve email from UserTrait (set via WithEmail() during List)
+	userTrait, err := rs.GetUserTrait(principal)
+	if err != nil {
+		return nil, fmt.Errorf("grafana-connector: cloud: failed to get user trait from principal: %w", err)
+	}
+
+	var email string
+	for _, e := range userTrait.GetEmails() {
+		if e.GetIsPrimary() {
+			email = e.GetAddress()
+			break
+		}
+	}
+	if email == "" && len(userTrait.GetEmails()) > 0 {
+		email = userTrait.GetEmails()[0].GetAddress()
+	}
+	if email == "" {
+		return nil, fmt.Errorf("grafana-connector: cloud: no email found on principal user %d", userID)
+	}
+
+	req := &grafana.AddUserToOrgRequest{
+		LoginOrEmail: email,
+		Role:         role,
+	}
+	if err = o.client.AddUserToCurrentOrg(ctx, req); err != nil {
+		return nil, fmt.Errorf("grafana-connector: cloud: failed to add user %s to org with role %s: %w", email, role, err)
+	}
+
+	return nil, nil
+}
+
+// grantSelfHosted is the original Grant logic for self-hosted Grafana — unchanged.
+func (o *orgBuilder) grantSelfHosted(ctx context.Context, l *zap.Logger, userID, orgID int, role string) (annotations.Annotations, error) {
 	l.Debug("Adding user to organization", zap.Int("org_id", orgID), zap.Int("user_id", userID), zap.String("role", role))
 
 	// Find the user in the organization's existing users
@@ -258,6 +365,47 @@ func (o *orgBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.A
 	}
 
 	l := ctxzap.Extract(ctx)
+
+	if o.client.IsCloud() {
+		return o.revokeCloud(ctx, l, userID, orgID)
+	}
+	return o.revokeSelfHosted(ctx, l, userID, orgID, grant)
+}
+
+// revokeCloud handles Revoke in Cloud mode.
+// Strategy:
+//  1. List current org users to check membership.
+//  2. Not found → GrantAlreadyRevoked (idempotent).
+//  3. Found → DELETE /api/org/users/:userId.
+func (o *orgBuilder) revokeCloud(ctx context.Context, l *zap.Logger, userID, orgID int) (annotations.Annotations, error) {
+	l.Debug("Cloud mode: revoking org membership", zap.Int("user_id", userID), zap.Int("org_id", orgID))
+
+	currentUsers, err := o.client.ListCurrentOrgUsers(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("grafana-connector: cloud: failed to list org users for revoke: %w", err)
+	}
+
+	found := false
+	for _, cu := range currentUsers {
+		if cu.ID == userID {
+			found = true
+			break
+		}
+	}
+
+	if !found {
+		return annotations.New(&v2.GrantAlreadyRevoked{}), nil
+	}
+
+	if err = o.client.RemoveCurrentOrgUser(ctx, userID); err != nil {
+		return nil, fmt.Errorf("grafana-connector: cloud: failed to remove user %d from org: %w", userID, err)
+	}
+
+	return nil, nil
+}
+
+// revokeSelfHosted is the original Revoke logic for self-hosted Grafana — unchanged.
+func (o *orgBuilder) revokeSelfHosted(ctx context.Context, l *zap.Logger, userID, orgID int, g *v2.Grant) (annotations.Annotations, error) {
 	l.Debug("Removing user from organization", zap.Int("org_id", orgID), zap.Int("user_id", userID))
 
 	// Check if the user is in the organization
@@ -280,7 +428,7 @@ func (o *orgBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.A
 	}
 
 	// Call the API to remove the user from the organization
-	err = o.client.RemoveUserFromOrg(ctx, grant.Entitlement.Resource.Id.Resource, userID)
+	err = o.client.RemoveUserFromOrg(ctx, g.Entitlement.Resource.Id.Resource, userID)
 	if err != nil {
 		return nil, fmt.Errorf("grafana-connector: failed to remove user %d from organization %d: %w",
 			userID, orgID, err)

@@ -85,23 +85,32 @@ func (g *Grafana) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error) {
 
 // Validate ensures the connector is properly configured and has valid API credentials.
 func (g *Grafana) Validate(ctx context.Context) (annotations.Annotations, error) {
-	paginationOpts := grafana.PaginationVars{
-		Size: 1,
-		Page: 0,
-	}
-
-	// Get the scope of used credentials
-	_, _, err := g.client.ListOrganizations(ctx, &paginationOpts)
-	if err != nil {
-		return nil, fmt.Errorf("grafana-connector: validate: failed to list organizations: %w", err)
+	if g.client.IsCloud() {
+		// Cloud mode: /api/orgs is forbidden; use the current-org endpoint instead
+		_, err := g.client.GetCurrentOrg(ctx)
+		if err != nil {
+			return nil, fmt.Errorf("grafana-connector: validate: failed to get current org: %w", err)
+		}
+	} else {
+		// Self-hosted mode: original validation via server-admin endpoint
+		paginationOpts := grafana.PaginationVars{
+			Size: 1,
+			Page: 0,
+		}
+		_, _, err := g.client.ListOrganizations(ctx, &paginationOpts)
+		if err != nil {
+			return nil, fmt.Errorf("grafana-connector: validate: failed to list organizations: %w", err)
+		}
 	}
 
 	return nil, nil
 }
 
 // New initializes a new instance of the Grafana connector.
-func New(ctx context.Context, hostname, username, password string) (*Grafana, error) {
-	grafanaClient, err := grafana.NewClient(ctx, hostname, username, password)
+// When apiToken is non-empty the connector operates in Cloud mode (Bearer auth, current-org scope).
+// When apiToken is empty the connector operates in self-hosted mode (Basic auth, server-admin scope).
+func New(ctx context.Context, hostname, username, password, apiToken string) (*Grafana, error) {
+	grafanaClient, err := grafana.NewClient(ctx, hostname, username, password, apiToken)
 	if err != nil {
 		l := ctxzap.Extract(ctx)
 		l.Error("Error creating Grafana client", zap.Error(err))

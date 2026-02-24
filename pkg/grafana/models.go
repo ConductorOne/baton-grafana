@@ -27,6 +27,7 @@ type Client struct {
 
 	username string
 	password string
+	apiToken string // non-empty = Cloud mode (Bearer auth)
 }
 
 type Organization struct {
@@ -88,4 +89,24 @@ type CreateUserRequest struct {
 type AddUserToOrgRequest struct {
 	LoginOrEmail string `json:"loginOrEmail"`
 	Role         string `json:"role"`
+}
+
+// UpdateOrgUserRoleRequest represents the request body for PATCH /api/org/users/:userId.
+type UpdateOrgUserRoleRequest struct {
+	Role string `json:"role"`
+}
+
+// InviteUserRequest represents the request body for POST /api/org/invites.
+type InviteUserRequest struct {
+	LoginOrEmail string `json:"loginOrEmail"`
+	Name         string `json:"name"`
+	Role         string `json:"role"`
+	SendEmail    bool   `json:"sendEmail"`
+}
+
+// InviteUserResponse represents the response from POST /api/org/invites.
+type InviteUserResponse struct {
+	Email       string `json:"email"`
+	EmailSent   bool   `json:"emailSent"`
+	InviteToken string `json:"inviteToken"`
 }
