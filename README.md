@@ -33,9 +33,9 @@ Check out [Baton](https://github.com/conductorone/baton) to learn more about the
 ### Requirements
 Before using `baton-grafana`, ensure you have:
 - A running **Grafana instance**.
-- An **admin account** with sufficient privileges.
-- A valid **username** and **password** for authentication.
 - The **Grafana domain URL** for API access.
+-  An **admin account** with sufficient privileges.
+- A valid **username** and **password** for authentication.
 
 ---
 
