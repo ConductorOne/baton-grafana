@@ -252,6 +252,16 @@ func (o *orgBuilder) grantCloud(ctx context.Context, l *zap.Logger, principal *v
 			// Role differs — update via PATCH (single call, no remove+re-add)
 			l.Debug("Cloud mode: updating user role via PATCH", zap.Int("user_id", userID), zap.String("new_role", role))
 			if err = o.client.UpdateOrgUserRole(ctx, userID, role); err != nil {
+				if cu.IsExternallySynced && isExternallySyncedRoleError(err) {
+					l.Error("grafana-connector: cloud: role change blocked — user is managed by an external identity provider",
+						zap.Int("user_id", userID),
+						zap.String("current_role", cu.Role),
+						zap.String("requested_role", role),
+						zap.Strings("auth_labels", cu.AuthLabels),
+						zap.String("resolution", "in Grafana, go to Administration → Authentication and enable 'Skip org role sync' for the SSO provider, or set skip_org_role_sync=true via PUT /api/v1/sso-settings/{provider}"),
+					)
+					return nil, fmt.Errorf("grafana-connector: cloud: user %d role is controlled by an external identity provider (current: %s, requested: %s) — to enable provisioning, set skip_org_role_sync=true in Grafana SSO settings: %w", userID, cu.Role, role, err)
+				}
 				return nil, fmt.Errorf("grafana-connector: cloud: failed to update role for user %d: %w", userID, err)
 			}
 			return nil, nil
@@ -386,9 +396,11 @@ func (o *orgBuilder) revokeCloud(ctx context.Context, l *zap.Logger, userID, org
 	}
 
 	found := false
+	var isExternallySynced bool
 	for _, cu := range currentUsers {
 		if cu.ID == userID {
 			found = true
+			isExternallySynced = cu.IsExternallySynced
 			break
 		}
 	}
@@ -398,6 +410,13 @@ func (o *orgBuilder) revokeCloud(ctx context.Context, l *zap.Logger, userID, org
 	}
 
 	if err = o.client.RemoveCurrentOrgUser(ctx, userID); err != nil {
+		if isExternallySynced && isExternallySyncedRoleError(err) {
+			l.Error("grafana-connector: cloud: membership revoke blocked — user is managed by an external identity provider",
+				zap.Int("user_id", userID),
+				zap.String("resolution", "in Grafana, go to Administration → Authentication and enable 'Skip org role sync' for the SSO provider, or set skip_org_role_sync=true via PUT /api/v1/sso-settings/{provider}"),
+			)
+			return nil, fmt.Errorf("grafana-connector: cloud: user %d is managed by an external identity provider and cannot be removed via the API — to enable provisioning, set skip_org_role_sync=true in Grafana SSO settings: %w", userID, err)
+		}
 		return nil, fmt.Errorf("grafana-connector: cloud: failed to remove user %d from org: %w", userID, err)
 	}
 
@@ -435,6 +454,14 @@ func (o *orgBuilder) revokeSelfHosted(ctx context.Context, l *zap.Logger, userID
 	}
 
 	return nil, nil
+}
+
+// isExternallySyncedRoleError reports whether a Grafana API error is the 403
+// "cannot change role for externally synced user" response. This error is
+// returned when the org role is controlled by an external identity provider
+// (SSO/SAML/OAuth) and skip_org_role_sync is not enabled on the Grafana instance.
+func isExternallySyncedRoleError(err error) bool {
+	return strings.Contains(err.Error(), "cannot change role for externally synced user")
 }
 
 func newOrgBuilder(client *grafana.Client) *orgBuilder {
