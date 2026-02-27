@@ -190,7 +190,7 @@ func (o *orgBuilder) Grants(ctx context.Context, parentResource *v2.Resource, _ 
 // Grant adds a user to an organization with the specified role.
 func (o *orgBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) (annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
-	
+
 	// Verify the principal is a user
 	if principal.Id.ResourceType != resourceTypeUser.Id {
 		return nil, fmt.Errorf("grafana-connector: principal must be a user, got %s", principal.Id.ResourceType)
@@ -258,9 +258,11 @@ func (o *orgBuilder) grantCloud(ctx context.Context, l *zap.Logger, principal *v
 						zap.String("current_role", cu.Role),
 						zap.String("requested_role", role),
 						zap.Strings("auth_labels", cu.AuthLabels),
-						zap.String("resolution", "in Grafana, go to Administration → Authentication and enable 'Skip org role sync' for the SSO provider, or set skip_org_role_sync=true via PUT /api/v1/sso-settings/{provider}"),
+						zap.String("resolution", "in Grafana, go to Administration → Authentication and enable 'Skip org role sync' for the SSO provider,"+
+							" or set skip_org_role_sync=true via PUT /api/v1/sso-settings/{provider}"),
 					)
-					return nil, fmt.Errorf("grafana-connector: cloud: user %d role is controlled by an external identity provider (current: %s, requested: %s) — to enable provisioning, set skip_org_role_sync=true in Grafana SSO settings: %w", userID, cu.Role, role, err)
+					return nil, fmt.Errorf("grafana-connector: cloud: user %d role is controlled by an external identity provider (current: %s, requested: %s) "+
+						"— to enable provisioning, set skip_org_role_sync=true in Grafana SSO settings: %w", userID, cu.Role, role, err)
 				}
 				return nil, fmt.Errorf("grafana-connector: cloud: failed to update role for user %d: %w", userID, err)
 			}
@@ -413,9 +415,11 @@ func (o *orgBuilder) revokeCloud(ctx context.Context, l *zap.Logger, userID, org
 		if isExternallySynced && isExternallySyncedRoleError(err) {
 			l.Error("grafana-connector: cloud: membership revoke blocked — user is managed by an external identity provider",
 				zap.Int("user_id", userID),
-				zap.String("resolution", "in Grafana, go to Administration → Authentication and enable 'Skip org role sync' for the SSO provider, or set skip_org_role_sync=true via PUT /api/v1/sso-settings/{provider}"),
+				zap.String("resolution", "in Grafana, go to Administration → Authentication and enable 'Skip org role sync' for the SSO provider, "+
+					"or set skip_org_role_sync=true via PUT /api/v1/sso-settings/{provider}"),
 			)
-			return nil, fmt.Errorf("grafana-connector: cloud: user %d is managed by an external identity provider and cannot be removed via the API — to enable provisioning, set skip_org_role_sync=true in Grafana SSO settings: %w", userID, err)
+			return nil, fmt.Errorf("grafana-connector: cloud: user %d is managed by an external identity provider and cannot be removed via the API "+
+				"— to enable provisioning, set skip_org_role_sync=true in Grafana SSO settings: %w", userID, err)
 		}
 		return nil, fmt.Errorf("grafana-connector: cloud: failed to remove user %d from org: %w", userID, err)
 	}
