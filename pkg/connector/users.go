@@ -160,7 +160,7 @@ func newUserBuilder(client *grafana.Client) *userBuilder {
 }
 
 // CreateAccountCapabilityDetails indicates the credential options this connector supports.
-func (u *userBuilder) CreateAccountCapabilityDetails(ctx context.Context) (*v2.CredentialDetailsAccountProvisioning, annotations.Annotations, error) {
+func (u *userBuilder) CreateAccountCapabilityDetails(_ context.Context) (*v2.CredentialDetailsAccountProvisioning, annotations.Annotations, error) {
 	if u.client.IsCloud() {
 		// Cloud mode: user creation is via org invite — no connector-generated password
 		return &v2.CredentialDetailsAccountProvisioning{
@@ -198,14 +198,14 @@ func (u *userBuilder) CreateAccount(
 		name = nameVal.GetStringValue()
 	}
 
+	if u.client.IsCloud() {
+		return u.createAccountCloud(ctx, l, email, name)
+	}
+
 	// Use email as login if not provided
 	login := email
 	if loginVal := accountInfo.Profile.GetFields()["login"]; loginVal != nil && loginVal.GetStringValue() != "" {
 		login = loginVal.GetStringValue()
-	}
-
-	if u.client.IsCloud() {
-		return u.createAccountCloud(ctx, l, email, name)
 	}
 	return u.createAccountSelfHosted(ctx, l, accountInfo, email, name, login, credentialOptions)
 }

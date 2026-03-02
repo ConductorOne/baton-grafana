@@ -28,7 +28,7 @@ const (
 
 	// Cloud-mode endpoints (current-org scope only).
 	GetCurrentOrgPath        = "/api/org"
-	ListCurrentOrgUsersPath  = "/api/org/users"
+	CurrentOrgUsersPath      = "/api/org/users"
 	UpdateCurrentOrgUserPath = "/api/org/users/%d" // Update role - PATCH — to update | DELETE — to remove
 	InviteUserPath           = "/api/org/invites"
 )
@@ -369,7 +369,7 @@ func (c *Client) GetCurrentOrg(ctx context.Context) (*Organization, error) {
 func (c *Client) ListCurrentOrgUsers(ctx context.Context) ([]UserByOrgResponse, error) {
 	var users []UserByOrgResponse
 
-	err := c.doRequest(ctx, http.MethodGet, c.buildResourceURL(ListCurrentOrgUsersPath), &users, nil, nil)
+	err := c.doRequest(ctx, http.MethodGet, c.buildResourceURL(CurrentOrgUsersPath), &users, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("grafana-client: list current org users: %w", err)
 	}
@@ -393,7 +393,7 @@ func (c *Client) UpdateOrgUserRole(ctx context.Context, userID int, role string)
 // AddUserToCurrentOrg adds an existing user (by login or email) to the current org.
 // Reuses AddUserToOrgRequest — same request shape as the self-hosted endpoint.
 func (c *Client) AddUserToCurrentOrg(ctx context.Context, req *AddUserToOrgRequest) error {
-	err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(ListCurrentOrgUsersPath), nil, req, nil)
+	err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(CurrentOrgUsersPath), nil, req, nil)
 	if err != nil {
 		return fmt.Errorf("grafana-client: add user to current org: %w", err)
 	}
