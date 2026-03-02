@@ -238,6 +238,7 @@ func (o *orgBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlem
 func (o *orgBuilder) grantCloud(ctx context.Context, l *zap.Logger, principal *v2.Resource, userID, orgID int, role string) (annotations.Annotations, error) {
 	l.Debug("Cloud mode: granting org membership", zap.Int("user_id", userID), zap.Int("org_id", orgID), zap.String("role", role))
 
+	// Grafana Cloud doesn't expose a single-user lookup via service account token, so requesting all of them per Grant call is somewhat forced.
 	currentUsers, err := o.client.ListCurrentOrgUsers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("grafana-connector: cloud: failed to list org users for grant: %w", err)
@@ -392,6 +393,7 @@ func (o *orgBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.A
 func (o *orgBuilder) revokeCloud(ctx context.Context, l *zap.Logger, userID, orgID int) (annotations.Annotations, error) {
 	l.Debug("Cloud mode: revoking org membership", zap.Int("user_id", userID), zap.Int("org_id", orgID))
 
+	// Grafana Cloud doesn't expose a single-user lookup via service account token, so requesting all of them per Revoke call is somewhat forced.
 	currentUsers, err := o.client.ListCurrentOrgUsers(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("grafana-connector: cloud: failed to list org users for revoke: %w", err)

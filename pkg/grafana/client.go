@@ -29,8 +29,7 @@ const (
 	// Cloud-mode endpoints (current-org scope only).
 	GetCurrentOrgPath        = "/api/org"
 	ListCurrentOrgUsersPath  = "/api/org/users"
-	UpdateCurrentOrgUserPath = "/api/org/users/%d" // PATCH — update role
-	RemoveCurrentOrgUserPath = "/api/org/users/%d" // DELETE — same path, different method
+	UpdateCurrentOrgUserPath = "/api/org/users/%d" // Update role - PATCH — to update | DELETE — to remove
 	InviteUserPath           = "/api/org/invites"
 )
 
@@ -404,7 +403,7 @@ func (c *Client) AddUserToCurrentOrg(ctx context.Context, req *AddUserToOrgReque
 
 // RemoveCurrentOrgUser removes a user from the current organization by user ID.
 func (c *Client) RemoveCurrentOrgUser(ctx context.Context, userID int) error {
-	err := c.doRequest(ctx, http.MethodDelete, c.buildResourceURL(RemoveCurrentOrgUserPath, userID), nil, nil, nil)
+	err := c.doRequest(ctx, http.MethodDelete, c.buildResourceURL(UpdateCurrentOrgUserPath, userID), nil, nil, nil)
 	if err != nil {
 		return fmt.Errorf("grafana-client: remove current org user: %w", err)
 	}

@@ -64,7 +64,11 @@ func userResource(user *grafana.User) (*v2.Resource, error) {
 }
 
 // List fetches all users in Grafana.
-func (u *userBuilder) List(ctx context.Context, parentResourceID *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
+// The parentResourceID parameter (SDK convention) is not used in either mode:
+// in Cloud mode the connector operates on the single org bound to the service account,
+// so no org scoping is needed; in self-hosted mode users are global Grafana entities,
+// not scoped per org.
+func (u *userBuilder) List(ctx context.Context, _ *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
 	if u.client.IsCloud() {
 		return u.listCloud(ctx)
 	}
