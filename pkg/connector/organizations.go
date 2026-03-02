@@ -296,7 +296,7 @@ func (o *orgBuilder) grantCloud(ctx context.Context, l *zap.Logger, principal *v
 		Role:         role,
 	}
 	if err = o.client.AddUserToCurrentOrg(ctx, req); err != nil {
-		return nil, fmt.Errorf("grafana-connector: cloud: failed to add user %s to org with role %s: %w", email, role, err)
+		return nil, fmt.Errorf("grafana-connector: cloud: failed to add user %d to org with role %s: %w", userID, role, err)
 	}
 
 	return nil, nil

@@ -284,7 +284,7 @@ func (u *userBuilder) createAccountSelfHosted(
 	if err != nil {
 		// Check if the error indicates the user already exists
 		if errors.Is(err, grafana.ErrUserAlreadyExists) {
-			l.Warn("User already exists in Grafana", zap.String("email", email), zap.String("login", login))
+			l.Debug("User already exists in Grafana", zap.String("email", email), zap.String("login", login))
 
 			// Try to find the user directly by login or email
 			existingUser, findErr := u.client.GetUserByLoginOrEmail(ctx, login)
@@ -368,7 +368,7 @@ func (u *userBuilder) deleteCloud(ctx context.Context, resourceId *v2.ResourceId
 		return nil, fmt.Errorf("grafana-connector: cloud: invalid user ID %s: %w", resourceId.Resource, err)
 	}
 
-	l.Warn("Cloud mode: delete removes user from org only — global Grafana Cloud account is NOT deleted",
+	l.Debug("Cloud mode: delete removes user from org only — global Grafana Cloud account is NOT deleted",
 		zap.String("user_id", resourceId.Resource))
 
 	if err = u.client.RemoveCurrentOrgUser(ctx, userID); err != nil {
