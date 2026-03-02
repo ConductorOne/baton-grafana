@@ -13,12 +13,12 @@ sidebarTitle: "Grafana"
 | Accounts | <Icon icon="square-check" iconType="solid"  color="#65DE23"/> | <Icon icon="square-check" iconType="solid"  color="#65DE23"/> |
 | Organizations | <Icon icon="square-check" iconType="solid"  color="#65DE23"/> | <Icon icon="square-check" iconType="solid"  color="#65DE23"/> |
 
-The Grafana connector supports both **self-hosted Grafana** instances and **Grafana Cloud**. The required credentials and provisioning behavior differ between the two — see [Gather Grafana credentials](#gather-grafana-credentials) below.
+The Grafana connector supports both **self-hosted Grafana** instances and **Grafana Cloud**. The required credentials and provisioning behavior differ between the two — see [Gather Grafana credentials](`#gather-grafana-credentials`) below.
 
 The Grafana connector supports [automatic account provisioning and deprovisioning](/product/admin/account-provisioning).
 
-When a new account is created by ConductorOne, the account's password will be sent to a [vault](/product/admin/vaults).
-
+For self-hosted Grafana, when a new account is created by ConductorOne, the account's password is sent to a [vault](/product/admin/vaults).
+For Grafana Cloud, account creation is invite-based and no connector-generated password is returned.
 <Note>
 **Grafana Cloud: provisioning organization roles for externally synced users**
 
