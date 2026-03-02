@@ -88,7 +88,7 @@ func (u *userBuilder) listCloud(ctx context.Context) ([]*v2.Resource, string, an
 		user := orgUser.ToUser() // ID preserved: UserByOrgResponse.ID (userId) → User.ID
 		ur, err := userResource(&user)
 		if err != nil {
-			return nil, "", nil, fmt.Errorf("grafana-connector: cloud: failed to create resource for user %s: %w", user.Email, err)
+			return nil, "", nil, fmt.Errorf("grafana-connector: cloud: failed to create user resource: %w", err)
 		}
 		resources = append(resources, ur)
 	}
@@ -221,7 +221,7 @@ func (u *userBuilder) createAccountCloud(
 	l *zap.Logger,
 	email, name string,
 ) (connectorbuilder.CreateAccountResponse, []*v2.PlaintextData, annotations.Annotations, error) {
-	l.Info("Cloud mode: sending org invite", zap.String("email", email))
+	l.Debug("Cloud mode: sending org invite")
 
 	inviteReq := &grafana.InviteUserRequest{
 		LoginOrEmail: email,
@@ -232,10 +232,10 @@ func (u *userBuilder) createAccountCloud(
 
 	inviteResp, err := u.client.InviteUserToOrg(ctx, inviteReq)
 	if err != nil {
-		return nil, nil, nil, fmt.Errorf("grafana-connector: cloud: failed to invite user %s: %w", email, err)
+		return nil, nil, nil, fmt.Errorf("grafana-connector: cloud: failed to invite user: %w", err)
 	}
 
-	l.Info("Cloud mode: invite sent", zap.String("email", inviteResp.Email), zap.Bool("email_sent", inviteResp.EmailSent))
+	l.Debug("Cloud mode: invite sent", zap.Bool("email_sent", inviteResp.EmailSent))
 
 	// ActionRequiredResult — user must accept invite; no resource ID available until they do
 	return &v2.CreateAccountResponse_ActionRequiredResult{}, nil, nil, nil
