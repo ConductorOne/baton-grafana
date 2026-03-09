@@ -15,6 +15,7 @@ import (
 )
 
 const (
+	// Self-hosted (server-admin) endpoints.
 	ListUsersPath         = "/api/users"
 	GetUserByIDPath       = "/api/users/%d"
 	CreateUserPath        = "/api/admin/users"
@@ -24,13 +25,21 @@ const (
 	AddUserToOrgPath      = "/api/orgs/%s/users"
 	RemoveUserFromOrgPath = "/api/orgs/%s/users/%d"
 	OrgsForUserPath       = "/api/users/%d/orgs"
+
+	// Cloud-mode endpoints (current-org scope only).
+	GetCurrentOrgPath        = "/api/org"
+	CurrentOrgUsersPath      = "/api/org/users"
+	UpdateCurrentOrgUserPath = "/api/org/users/%d" // Update role - PATCH — to update | DELETE — to remove
+	InviteUserPath           = "/api/org/invites"
 )
 
 // ErrUserAlreadyExists is returned when attempting to create a user that already exists in Grafana.
 var ErrUserAlreadyExists = errors.New("grafana-client: user already exists")
 
 // NewClient initializes a new Grafana API client.
-func NewClient(ctx context.Context, hostname, username, password string) (*Client, error) {
+// When apiToken is non-empty the client operates in Cloud mode (Bearer auth).
+// When apiToken is empty the client operates in self-hosted mode (Basic auth).
+func NewClient(ctx context.Context, hostname, username, password, apiToken string) (*Client, error) {
 	baseUrl, err := url.Parse(hostname)
 	if err != nil {
 		return nil, err
@@ -51,7 +60,15 @@ func NewClient(ctx context.Context, hostname, username, password string) (*Clien
 		baseUrl:    baseUrl,
 		username:   username,
 		password:   password,
+		apiToken:   apiToken,
 	}, nil
+}
+
+// IsCloud returns true when the client is configured with a service account token,
+// indicating Grafana Cloud mode. In Cloud mode, Bearer auth is used and only the
+// current-org endpoint set is available.
+func (c *Client) IsCloud() bool {
+	return c.apiToken != ""
 }
 
 // buildResourceURL constructs an absolute URL by formatting a resource path
@@ -182,10 +199,14 @@ func (c *Client) doRequest(
 		uhttp.WithAccept("application/json"),
 	}
 
-	// Set authentication method
-	authString := fmt.Sprintf("%s:%s", c.username, c.password)
-	authEncoded := base64.StdEncoding.EncodeToString([]byte(authString))
-	reqOptions = append(reqOptions, uhttp.WithHeader("Authorization", "Basic "+authEncoded))
+	// Set authentication method — Bearer (Cloud) or Basic (self-hosted)
+	if c.IsCloud() {
+		reqOptions = append(reqOptions, uhttp.WithHeader("Authorization", "Bearer "+c.apiToken))
+	} else {
+		authString := fmt.Sprintf("%s:%s", c.username, c.password)
+		authEncoded := base64.StdEncoding.EncodeToString([]byte(authString))
+		reqOptions = append(reqOptions, uhttp.WithHeader("Authorization", "Basic "+authEncoded))
+	}
 
 	if data != nil {
 		reqOptions = append(reqOptions, uhttp.WithJSONBody(data))
@@ -328,6 +349,79 @@ func (c *Client) DeleteUser(ctx context.Context, userId string) error {
 	}
 
 	return nil
+}
+
+// GetCurrentOrg fetches the organization the authenticated service account belongs to.
+// Cloud-mode equivalent of ListOrganizations() for a single org.
+func (c *Client) GetCurrentOrg(ctx context.Context) (*Organization, error) {
+	var org Organization
+
+	err := c.doRequest(ctx, http.MethodGet, c.buildResourceURL(GetCurrentOrgPath), &org, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("grafana-client: get current org: %w", err)
+	}
+
+	return &org, nil
+}
+
+// ListCurrentOrgUsers fetches all members of the current organization.
+// No pagination — the endpoint returns the full list in one response.
+func (c *Client) ListCurrentOrgUsers(ctx context.Context) ([]UserByOrgResponse, error) {
+	var users []UserByOrgResponse
+
+	err := c.doRequest(ctx, http.MethodGet, c.buildResourceURL(CurrentOrgUsersPath), &users, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("grafana-client: list current org users: %w", err)
+	}
+
+	return users, nil
+}
+
+// UpdateOrgUserRole updates a user's role in the current org via PATCH.
+// In Cloud mode this replaces the self-hosted remove+re-add pattern.
+func (c *Client) UpdateOrgUserRole(ctx context.Context, userID int, role string) error {
+	req := &UpdateOrgUserRoleRequest{Role: role}
+
+	err := c.doRequest(ctx, http.MethodPatch, c.buildResourceURL(UpdateCurrentOrgUserPath, userID), nil, req, nil)
+	if err != nil {
+		return fmt.Errorf("grafana-client: update org user role: %w", err)
+	}
+
+	return nil
+}
+
+// AddUserToCurrentOrg adds an existing user (by login or email) to the current org.
+// Reuses AddUserToOrgRequest — same request shape as the self-hosted endpoint.
+func (c *Client) AddUserToCurrentOrg(ctx context.Context, req *AddUserToOrgRequest) error {
+	err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(CurrentOrgUsersPath), nil, req, nil)
+	if err != nil {
+		return fmt.Errorf("grafana-client: add user to current org: %w", err)
+	}
+
+	return nil
+}
+
+// RemoveCurrentOrgUser removes a user from the current organization by user ID.
+func (c *Client) RemoveCurrentOrgUser(ctx context.Context, userID int) error {
+	err := c.doRequest(ctx, http.MethodDelete, c.buildResourceURL(UpdateCurrentOrgUserPath, userID), nil, nil, nil)
+	if err != nil {
+		return fmt.Errorf("grafana-client: remove current org user: %w", err)
+	}
+
+	return nil
+}
+
+// InviteUserToOrg sends an invitation to a user to join the current organization.
+// Used in Cloud mode for CreateAccount — direct user creation is not available via service account tokens.
+func (c *Client) InviteUserToOrg(ctx context.Context, req *InviteUserRequest) (*InviteUserResponse, error) {
+	var resp InviteUserResponse
+
+	err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(InviteUserPath), &resp, req, nil)
+	if err != nil {
+		return nil, fmt.Errorf("grafana-client: invite user to org: %w", err)
+	}
+
+	return &resp, nil
 }
 
 // AddUserToOrg adds a user to an organization with a specified role.

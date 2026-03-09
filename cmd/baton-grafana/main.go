@@ -40,8 +40,9 @@ func getConnector(ctx context.Context, gc *cfg.Grafana) (types.ConnectorServer, 
 	hostname := gc.Hostname
 	username := gc.Username
 	password := gc.Password
+	apiToken := gc.APIToken
 
-	cb, err := connector.New(ctx, hostname, username, password)
+	cb, err := connector.New(ctx, hostname, username, password, apiToken)
 	if err != nil {
 		l.Error("error creating connector", zap.Error(err))
 		return nil, err
