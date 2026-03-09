@@ -271,35 +271,11 @@ func (o *orgBuilder) grantCloud(ctx context.Context, l *zap.Logger, principal *v
 		}
 	}
 
-	// User not in org — retrieve email from UserTrait (set via WithEmail() during List)
-	userTrait, err := rs.GetUserTrait(principal)
-	if err != nil {
-		return nil, fmt.Errorf("grafana-connector: cloud: failed to get user trait from principal: %w", err)
-	}
-
-	var email string
-	for _, e := range userTrait.GetEmails() {
-		if e.GetIsPrimary() {
-			email = e.GetAddress()
-			break
-		}
-	}
-	if email == "" && len(userTrait.GetEmails()) > 0 {
-		email = userTrait.GetEmails()[0].GetAddress()
-	}
-	if email == "" {
-		return nil, fmt.Errorf("grafana-connector: cloud: no email found on principal user %d", userID)
-	}
-
-	req := &grafana.AddUserToOrgRequest{
-		LoginOrEmail: email,
-		Role:         role,
-	}
-	if err = o.client.AddUserToCurrentOrg(ctx, req); err != nil {
-		return nil, fmt.Errorf("grafana-connector: cloud: failed to add user %d to org with role %s: %w", userID, role, err)
-	}
-
-	return nil, nil
+	// User not found in the current org — this is unexpected in Cloud mode because listCloud
+	// fetches exclusively from GET /api/org/users (org members only), so every principal
+	// known to ConductorOne must already be an org member. Adding a non-member here would
+	// effectively be provisioning, which is the responsibility of CreateAccount, not Grant.
+	return nil, fmt.Errorf("grafana-connector: cloud: user %d not found in current org — cannot grant role without existing membership", userID)
 }
 
 // grantSelfHosted is the original Grant logic for self-hosted Grafana — unchanged.
