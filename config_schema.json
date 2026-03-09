@@ -126,9 +126,43 @@
           "isRequired": true
         }
       }
+    },
+    {
+      "name": "api-token",
+      "displayName": "API Token",
+      "description": "Grafana Cloud service account token. When set, the connector uses Bearer authentication (Cloud mode). Leave empty for self-hosted Grafana.",
+      "isRequired": true,
+      "isSecret": true,
+      "stringField": {
+        "rules": {
+          "isRequired": true
+        }
+      }
     }
   ],
   "displayName": "Grafana",
   "helpUrl": "/docs/baton/grafana",
-  "iconUrl": "/static/app-icons/grafana.svg"
+  "iconUrl": "/static/app-icons/grafana.svg",
+  "fieldGroups": [
+    {
+      "name": "basic-auth-flow-group",
+      "displayName": "Basic Authentication",
+      "helpText": "Use the Basic Auth Flow for authentication.",
+      "fields": [
+        "username",
+        "password",
+        "hostname"
+      ],
+      "default": true
+    },
+    {
+      "name": "api-key-flow-group",
+      "displayName": "API Key",
+      "helpText": "Use an API Key with an expiration date for authentication.",
+      "fields": [
+        "api-token",
+        "hostname"
+      ]
+    }
+  ]
 }
