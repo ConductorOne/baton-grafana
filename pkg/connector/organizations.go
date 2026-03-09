@@ -223,7 +223,7 @@ func (o *orgBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlem
 	}
 
 	if o.client.IsCloud() {
-		return o.grantCloud(ctx, l, principal, userID, orgID, role)
+		return o.grantCloud(ctx, l, userID, orgID, role)
 	}
 	return o.grantSelfHosted(ctx, l, userID, orgID, role)
 }
@@ -235,7 +235,7 @@ func (o *orgBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlem
 //  3. Different role → PATCH (no remove+re-add needed, more efficient).
 //  4. Not in org → POST /api/org/users using email from UserTrait (avoids
 //     GET /api/users/:id which is forbidden in Cloud mode).
-func (o *orgBuilder) grantCloud(ctx context.Context, l *zap.Logger, principal *v2.Resource, userID, orgID int, role string) (annotations.Annotations, error) {
+func (o *orgBuilder) grantCloud(ctx context.Context, l *zap.Logger, userID, orgID int, role string) (annotations.Annotations, error) {
 	l.Debug("Cloud mode: granting org membership", zap.Int("user_id", userID), zap.Int("org_id", orgID), zap.String("role", role))
 
 	// Grafana Cloud doesn't expose a single-user lookup via service account token, so requesting all of them per Grant call is somewhat forced.
