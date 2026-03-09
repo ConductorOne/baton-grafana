@@ -25,7 +25,7 @@ type userBuilder struct {
 var _ connectorbuilder.AccountManager = &userBuilder{}
 
 // ResourceType returns the Baton resource type for users.
-func (u *userBuilder) ResourceType(ctx context.Context) *v2.ResourceType {
+func (u *userBuilder) ResourceType(_ context.Context) *v2.ResourceType {
 	return resourceTypeUser
 }
 
@@ -142,12 +142,12 @@ func (u *userBuilder) listSelfHosted(ctx context.Context, pToken *pagination.Tok
 }
 
 // Entitlements returns an empty list for users.
-func (u *userBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
+func (u *userBuilder) Entitlements(_ context.Context, _ *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
 	return nil, "", nil, nil
 }
 
 // Grants returns an empty list for users.
-func (u *userBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
+func (u *userBuilder) Grants(_ context.Context, _ *v2.Resource, _ *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
 	return nil, "", nil, nil
 }
 
