@@ -164,9 +164,13 @@ func (u *userBuilder) CreateAccountCapabilityDetails(_ context.Context) (*v2.Cre
 	if u.client.IsCloud() {
 		// Cloud mode: user creation is via org invite — no connector-generated password
 		return &v2.CredentialDetailsAccountProvisioning{
-			SupportedCredentialOptions: []v2.CapabilityDetailCredentialOption{},
+			SupportedCredentialOptions: []v2.CapabilityDetailCredentialOption{
+				v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_NO_PASSWORD,
+			},
+			PreferredCredentialOption: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_NO_PASSWORD,
 		}, nil, nil
 	}
+	
 	// Self-hosted mode: original behavior unchanged
 	return &v2.CredentialDetailsAccountProvisioning{
 		SupportedCredentialOptions: []v2.CapabilityDetailCredentialOption{
