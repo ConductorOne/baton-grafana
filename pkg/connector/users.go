@@ -32,12 +32,8 @@ func (u *userBuilder) ResourceType(_ context.Context) *v2.ResourceType {
 
 // userResource creates a Baton resource for a Grafana user.
 func userResource(user *grafana.User) (*v2.Resource, error) {
-	// Surface the access origin so access reviews can tell whether the user was
-	// provisioned locally in Grafana or synced from an external IdP (e.g. Entra/
-	// Azure AD). isExternallySynced is only returned on the org-users endpoint
-	// (Cloud), so we also derive it from authLabels — the presence of an external
-	// auth provider — which is available on both the org-users and global-users
-	// endpoints. auth_labels names the provider(s) when present.
+	// Access origin: the native flag, or (fallback for the global users endpoint
+	// that omits it) the presence of an external auth label.
 	externallySynced := user.IsExternallySynced || len(user.AuthLabels) > 0
 	profile := map[string]interface{}{
 		"full_name":            user.Name,

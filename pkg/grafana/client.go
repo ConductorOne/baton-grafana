@@ -259,15 +259,15 @@ func (c *Client) doRequest(
 // Convert UserByOrg to User.
 func (ubo UserByOrgResponse) ToUser() User {
 	return User{
-		ID:            ubo.ID, // Maps userId -> id
-		Name:          ubo.Name,
-		Login:         ubo.Login,
-		Email:         ubo.Email,
-		AvatarUrl:     ubo.AvatarUrl,
-		IsDisabled:    ubo.IsDisabled,
-		LastSeenAt:    ubo.LastSeenAt,
-		LastSeenAtAge: ubo.LastSeenAtAge,
-		AuthLabels:    ubo.AuthLabels,
+		ID:                 ubo.ID, // Maps userId -> id
+		Name:               ubo.Name,
+		Login:              ubo.Login,
+		Email:              ubo.Email,
+		AvatarUrl:          ubo.AvatarUrl,
+		IsDisabled:         ubo.IsDisabled,
+		LastSeenAt:         ubo.LastSeenAt,
+		LastSeenAtAge:      ubo.LastSeenAtAge,
+		AuthLabels:         ubo.AuthLabels,
 		IsExternallySynced: ubo.IsExternallySynced,
 	}
 }

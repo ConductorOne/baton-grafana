@@ -275,14 +275,7 @@ func TestRevokeCloud_RemovesUser(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Grants — externally-synced access origin (CXH-1711)
-// ---------------------------------------------------------------------------
-
-// The user's profile must surface the access origin. is_externally_synced is
-// true when Grafana reports it (Cloud org-users) OR when the user carries an
-// external auth label (available on the global-users endpoint too), so the
-// origin is visible in both Cloud and self-hosted modes.
+// is_externally_synced comes from the native flag or is derived from auth labels.
 func TestUserResource_SurfacesExternalSyncOnProfile(t *testing.T) {
 	cases := []struct {
 		name           string

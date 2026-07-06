@@ -53,9 +53,7 @@ type User struct {
 	LastSeenAt    string   `json:"lastSeenAt"`
 	LastSeenAtAge string   `json:"lastSeenAtAge"`
 	AuthLabels    []string `json:"authLabels"`
-	// IsExternallySynced reports whether the org membership is managed by an
-	// external identity provider (SSO/SAML/SCIM) rather than granted locally.
-	// Only populated on the org-users path (ToUser); false on the global users API.
+	// IsExternallySynced reports whether the org role is managed by an external IdP.
 	IsExternallySynced bool `json:"isExternallySynced"`
 }
 
