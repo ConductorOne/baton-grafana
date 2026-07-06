@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 
 	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -31,11 +32,22 @@ func (u *userBuilder) ResourceType(_ context.Context) *v2.ResourceType {
 
 // userResource creates a Baton resource for a Grafana user.
 func userResource(user *grafana.User) (*v2.Resource, error) {
+	// Surface the access origin so access reviews can tell whether the user was
+	// provisioned locally in Grafana or synced from an external IdP (e.g. Entra/
+	// Azure AD). isExternallySynced is only returned on the org-users endpoint
+	// (Cloud), so we also derive it from authLabels — the presence of an external
+	// auth provider — which is available on both the org-users and global-users
+	// endpoints. auth_labels names the provider(s) when present.
+	externallySynced := user.IsExternallySynced || len(user.AuthLabels) > 0
 	profile := map[string]interface{}{
-		"full_name": user.Name,
-		"login":     user.Login,
-		"user_id":   user.ID,
-		"email":     user.Email,
+		"full_name":            user.Name,
+		"login":                user.Login,
+		"user_id":              user.ID,
+		"email":                user.Email,
+		"is_externally_synced": externallySynced,
+	}
+	if len(user.AuthLabels) > 0 {
+		profile["auth_labels"] = strings.Join(user.AuthLabels, ",")
 	}
 
 	status := v2.UserTrait_Status_STATUS_ENABLED

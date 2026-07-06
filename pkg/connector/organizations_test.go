@@ -12,6 +12,7 @@ import (
 
 	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
+	"github.com/conductorone/baton-sdk/pkg/annotations"
 )
 
 // newCloudClientForTest creates a grafana.Client in Cloud mode (Bearer auth) pointed at ts.
@@ -271,5 +272,63 @@ func TestRevokeCloud_RemovesUser(t *testing.T) {
 	}
 	if !deleteCalled {
 		t.Error("expected DELETE /api/org/users/42 to be called")
+	}
+}
+
+// ---------------------------------------------------------------------------
+// Grants — externally-synced access origin (CXH-1711)
+// ---------------------------------------------------------------------------
+
+// The user's profile must surface the access origin. is_externally_synced is
+// true when Grafana reports it (Cloud org-users) OR when the user carries an
+// external auth label (available on the global-users endpoint too), so the
+// origin is visible in both Cloud and self-hosted modes.
+func TestUserResource_SurfacesExternalSyncOnProfile(t *testing.T) {
+	cases := []struct {
+		name           string
+		user           grafana.User
+		wantSynced     bool
+		wantAuthLabels string
+	}{
+		{
+			name:           "cloud flag set",
+			user:           grafana.User{ID: 42, Login: "alice", IsExternallySynced: true, AuthLabels: []string{"grafana.com"}},
+			wantSynced:     true,
+			wantAuthLabels: "grafana.com",
+		},
+		{
+			name:           "self-hosted derives from auth labels",
+			user:           grafana.User{ID: 43, Login: "keycloak-user", IsExternallySynced: false, AuthLabels: []string{"Generic OAuth"}},
+			wantSynced:     true,
+			wantAuthLabels: "Generic OAuth",
+		},
+		{
+			name:           "local user",
+			user:           grafana.User{ID: 44, Login: "bob"},
+			wantSynced:     false,
+			wantAuthLabels: "",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			r, err := userResource(&tc.user)
+			if err != nil {
+				t.Fatalf("userResource returned unexpected error: %v", err)
+			}
+
+			ut := &v2.UserTrait{}
+			annos := annotations.Annotations(r.Annotations)
+			if ok, err := annos.Pick(ut); err != nil || !ok {
+				t.Fatalf("user resource missing UserTrait (ok=%v, err=%v)", ok, err)
+			}
+			fields := ut.GetProfile().GetFields()
+			if got := fields["is_externally_synced"].GetBoolValue(); got != tc.wantSynced {
+				t.Errorf("is_externally_synced = %v, want %v", got, tc.wantSynced)
+			}
+			if got := fields["auth_labels"].GetStringValue(); got != tc.wantAuthLabels {
+				t.Errorf("auth_labels = %q, want %q", got, tc.wantAuthLabels)
+			}
+		})
 	}
 }
