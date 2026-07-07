@@ -34,7 +34,8 @@ func (u *userBuilder) ResourceType(_ context.Context) *v2.ResourceType {
 func userResource(user *grafana.User) (*v2.Resource, error) {
 	// Access origin: the native flag, or (fallback for the global users endpoint
 	// that omits it) the presence of an external auth label.
-	externallySynced := user.IsExternallySynced || len(user.AuthLabels) > 0
+	hasAuthLabels := len(user.AuthLabels) > 0
+	externallySynced := user.IsExternallySynced || hasAuthLabels
 	profile := map[string]interface{}{
 		"full_name":            user.Name,
 		"login":                user.Login,
@@ -42,8 +43,9 @@ func userResource(user *grafana.User) (*v2.Resource, error) {
 		"email":                user.Email,
 		"is_externally_synced": externallySynced,
 	}
-	if len(user.AuthLabels) > 0 {
-		profile["auth_labels"] = strings.Join(user.AuthLabels, ",")
+	if hasAuthLabels {
+		// "; " (not ",") because a Grafana auth label may itself contain a comma.
+		profile["auth_labels"] = strings.Join(user.AuthLabels, "; ")
 	}
 
 	status := v2.UserTrait_Status_STATUS_ENABLED
@@ -178,7 +180,7 @@ func (u *userBuilder) CreateAccountCapabilityDetails(_ context.Context) (*v2.Cre
 			PreferredCredentialOption: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_NO_PASSWORD,
 		}, nil, nil
 	}
-	
+
 	// Self-hosted mode: original behavior unchanged
 	return &v2.CredentialDetailsAccountProvisioning{
 		SupportedCredentialOptions: []v2.CapabilityDetailCredentialOption{
