@@ -32,8 +32,15 @@ func (u *userBuilder) ResourceType(_ context.Context) *v2.ResourceType {
 
 // userResource creates a Baton resource for a Grafana user.
 func userResource(user *grafana.User) (*v2.Resource, error) {
-	// Access origin: the native flag, or (fallback for the global users endpoint
-	// that omits it) the presence of an external auth label.
+	// is_externally_synced surfaces the user's access origin, and its exact meaning
+	// depends on which endpoint fed this user (the conflation is intentional):
+	//   - Cloud (org-users): the native IsExternallySynced flag = the org role is
+	//     managed by an external IdP.
+	//   - Self-hosted (global /api/users): that flag is never returned, so we fall
+	//     back to AuthLabels = the user authenticated via an external module
+	//     (SSO/LDAP/OAuth). This is broader than role-sync, so a locally-managed
+	//     role logging in via SSO also reports true.
+	// Both cases answer "is this access externally originated?", which is the intent.
 	hasAuthLabels := len(user.AuthLabels) > 0
 	externallySynced := user.IsExternallySynced || hasAuthLabels
 	profile := map[string]interface{}{
