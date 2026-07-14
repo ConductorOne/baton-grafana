@@ -38,7 +38,7 @@ func (g *Grafana) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error) {
 		Description: "Connector syncing Grafana organizations and users to Baton",
 		AccountCreationSchema: &v2.ConnectorAccountCreationSchema{
 			FieldMap: map[string]*v2.ConnectorAccountCreationSchema_Field{
-				"full_name": {
+				profileFieldFullName: {
 					DisplayName: "Full Name",
 					Required:    true,
 					Description: "User's full name for display purposes",
@@ -48,7 +48,7 @@ func (g *Grafana) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error) {
 					Placeholder: "John Doe",
 					Order:       1,
 				},
-				"email": {
+				profileFieldEmail: {
 					DisplayName: "Email",
 					Required:    true,
 					Description: "User's email address (used for login if username is not provided)",

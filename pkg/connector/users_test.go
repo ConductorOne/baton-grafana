@@ -2,14 +2,17 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestListCloud_CreatesUserResources(t *testing.T) {
@@ -75,6 +78,41 @@ func TestListCloud_DisabledUserHasDisabledStatus(t *testing.T) {
 	}
 	if userTrait.GetStatus().GetStatus() != v2.UserTrait_Status_STATUS_DISABLED {
 		t.Errorf("expected STATUS_DISABLED for disabled user, got %v", userTrait.GetStatus().GetStatus())
+	}
+}
+
+// TestCreateAccountCloud_LoginDisabledReturnsActionableError reproduces CXH-2012:
+// a default-configuration Grafana Cloud instance (basic login form disabled) rejects
+// invites for brand-new external users with HTTP 400. The connector must surface an
+// actionable error tagged with grafana.ErrExternalUserLoginDisabled, not an opaque 400.
+func TestCreateAccountCloud_LoginDisabledReturnsActionableError(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/org/invites", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusBadRequest, grafana.GrafanaError{
+			ErrorMessage: "Cannot invite external user when login is disabled.",
+		})
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	profile, err := structpb.NewStruct(map[string]interface{}{
+		profileFieldEmail:    "qa.probe@example.com",
+		profileFieldFullName: "QA Probe",
+	})
+	if err != nil {
+		t.Fatalf("structpb.NewStruct: %v", err)
+	}
+
+	builder := newUserBuilder(newCloudClientForTest(t, ts))
+	_, _, _, err = builder.CreateAccount(context.Background(), &v2.AccountInfo{Profile: profile}, nil)
+	if err == nil {
+		t.Fatal("expected CreateAccount to fail when login is disabled, got nil error")
+	}
+	if !errors.Is(err, grafana.ErrExternalUserLoginDisabled) {
+		t.Errorf("expected error to wrap grafana.ErrExternalUserLoginDisabled, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "SCIM") {
+		t.Errorf("expected actionable error mentioning SCIM, got %v", err)
 	}
 }
 

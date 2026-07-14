@@ -138,6 +138,24 @@ This information provides insight into user access management in Grafana.
 
 ---
 
+## Account Provisioning
+
+`baton-grafana` supports account provisioning in both self-hosted and Grafana Cloud modes, but the behavior differs:
+
+- **Self-hosted Grafana:** a new user is created directly (`POST /api/admin/users`) and the generated password is returned to ConductorOne.
+- **Grafana Cloud:** account creation is invite-based (`POST /api/org/invites`) and no password is returned.
+
+> **Grafana Cloud prerequisite — the basic login form must allow the invite.**
+> Grafana Cloud instances ship with the basic login form **disabled** by default (users authenticate through grafana.com / SSO). While it is disabled, Grafana rejects instance-level invites for users who do not yet exist in the instance, and account creation fails with `Cannot invite external user when login is disabled.`
+>
+> With the service-account token the connector uses:
+> - **Users who already exist** in the instance (provisioned earlier via SSO, SCIM, or grafana.com) are added to the organization normally.
+> - **Brand-new users** cannot be created until you either enable [SCIM provisioning](https://grafana.com/docs/grafana/latest/setup-grafana/configure-access/configure-scim-provisioning/) (Grafana's recommended path for automatic user lifecycle in Cloud) or enable the basic login form (`disable_login_form = false`).
+>
+> Managing membership through the grafana.com portal is a separate API and credential (a Grafana Cloud Access Policy token) that the connector's instance service-account token cannot use.
+
+---
+
 ## Command Line Options
 
 Below is a complete list of supported flags along with their corresponding environment variables and default values (if applicable):
