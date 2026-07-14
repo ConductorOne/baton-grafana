@@ -428,9 +428,12 @@ func (c *Client) InviteUserToOrg(ctx context.Context, req *InviteUserRequest) (*
 	err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(InviteUserPath), &resp, req, nil)
 	if err != nil {
 		// Grafana rejects invites for brand-new external users when the basic
-		// login form is disabled (the Grafana Cloud default). Tag it so the
-		// connector can surface an actionable error instead of a raw 400.
-		if strings.Contains(err.Error(), "login is disabled") {
+		// login form is disabled (the Grafana Cloud default). Gate on the 400
+		// status (like the 412 check for ErrUserAlreadyExists) plus the message
+		// so an unrelated error carrying the same phrase isn't mis-tagged; a
+		// reworded message just falls through to the generic error below.
+		if strings.Contains(err.Error(), fmt.Sprintf("%d", http.StatusBadRequest)) &&
+			strings.Contains(err.Error(), "login is disabled") {
 			return nil, fmt.Errorf("%w: %w", ErrExternalUserLoginDisabled, err)
 		}
 		return nil, fmt.Errorf("grafana-client: invite user to org: %w", err)

@@ -95,9 +95,9 @@ func TestCreateAccountCloud_LoginDisabledReturnsActionableError(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	profile, err := structpb.NewStruct(map[string]interface{}{
-		profileFieldEmail:    "qa.probe@example.com",
-		profileFieldFullName: "QA Probe",
+	profile, err := structpb.NewStruct(map[string]any{
+		profileFieldEmail:    "jane.doe@example.com",
+		profileFieldFullName: "Jane Doe",
 	})
 	if err != nil {
 		t.Fatalf("structpb.NewStruct: %v", err)
@@ -113,6 +113,38 @@ func TestCreateAccountCloud_LoginDisabledReturnsActionableError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "SCIM") {
 		t.Errorf("expected actionable error mentioning SCIM, got %v", err)
+	}
+}
+
+// TestCreateAccountCloud_Non400WithSameMessageIsNotTagged guards the 400 status
+// gate: an error that carries the "login is disabled" phrase but is NOT a 400
+// (e.g. a 500) must fall through to the generic path, not be mis-tagged as
+// ErrExternalUserLoginDisabled.
+func TestCreateAccountCloud_Non400WithSameMessageIsNotTagged(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/org/invites", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusInternalServerError, grafana.GrafanaError{
+			ErrorMessage: "Cannot invite external user when login is disabled.",
+		})
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	profile, err := structpb.NewStruct(map[string]any{
+		profileFieldEmail:    "jane.doe@example.com",
+		profileFieldFullName: "Jane Doe",
+	})
+	if err != nil {
+		t.Fatalf("structpb.NewStruct: %v", err)
+	}
+
+	builder := newUserBuilder(newCloudClientForTest(t, ts))
+	_, _, _, err = builder.CreateAccount(context.Background(), &v2.AccountInfo{Profile: profile}, nil)
+	if err == nil {
+		t.Fatal("expected CreateAccount to fail on a 500, got nil error")
+	}
+	if errors.Is(err, grafana.ErrExternalUserLoginDisabled) {
+		t.Errorf("a non-400 error must not be tagged ErrExternalUserLoginDisabled, got %v", err)
 	}
 }
 
