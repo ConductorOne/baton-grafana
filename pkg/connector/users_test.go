@@ -12,6 +12,8 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -113,6 +115,11 @@ func TestCreateAccountCloud_LoginDisabledReturnsActionableError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "SCIM") {
 		t.Errorf("expected actionable error mentioning SCIM, got %v", err)
+	}
+	// The failure is a terminal configuration prerequisite: the platform must see
+	// InvalidArgument (non-retryable), not an opaque codes.Unknown from a bare fmt.Errorf.
+	if code := status.Code(err); code != codes.InvalidArgument {
+		t.Errorf("expected gRPC status codes.InvalidArgument, got %v", code)
 	}
 }
 

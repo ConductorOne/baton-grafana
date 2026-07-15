@@ -14,8 +14,10 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/crypto"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
 )
 
 // Account-creation profile field keys. These MUST match the keys declared in the
@@ -267,10 +269,17 @@ func (u *userBuilder) createAccountCloud(
 		// via SSO / SCIM / grafana.com); creating new users requires SCIM provisioning
 		// or enabling the basic login form.
 		if errors.Is(err, grafana.ErrExternalUserLoginDisabled) {
-			return nil, nil, nil, fmt.Errorf(
-				"grafana-connector: cloud: cannot provision new user %q because the instance's basic login form is disabled (the Grafana Cloud default); "+
-					"C1 can only add users that already exist in this instance (provisioned via SSO/SCIM/grafana.com) — to create new users, enable SCIM provisioning or the basic login form: %w",
-				email, err)
+			// Terminal, non-retryable: a configuration prerequisite, not a transient
+			// failure. WrapErrors attaches an explicit InvalidArgument gRPC status so
+			// the platform surfaces the prerequisite instead of retrying, while the
+			// errors.Join chain keeps ErrExternalUserLoginDisabled unwrappable.
+			return nil, nil, nil, uhttp.WrapErrors(
+				codes.InvalidArgument,
+				fmt.Sprintf(
+					"grafana-connector: cloud: cannot provision new user %q because the instance's basic login form is disabled (the Grafana Cloud default); "+
+						"C1 can only add users that already exist in this instance (provisioned via SSO/SCIM/grafana.com) — to create new users, enable SCIM provisioning or the basic login form",
+					email),
+				err)
 		}
 		return nil, nil, nil, fmt.Errorf("grafana-connector: cloud: failed to invite user: %w", err)
 	}
