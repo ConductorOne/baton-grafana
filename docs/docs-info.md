@@ -137,8 +137,15 @@ connector uses, so it is not an option from within the connector.
 
 Each synced user profile carries `is_externally_synced` and `auth_labels` to
 indicate the origin of the user's access (see `connector.mdx` → "Account access
-origin"). In Cloud the value is Grafana's native `isExternallySynced` flag; in
-self-hosted it is derived from the user's auth labels.
+origin"). In Cloud the value mirrors Grafana's native `isExternallySynced` flag
+verbatim (external role sync) — the `auth_labels` fallback is deliberately NOT
+applied there, because every Cloud user authenticates through grafana.com and the
+fallback would otherwise report `true` for everyone (CXH-2063). In self-hosted the
+global `/api/users` endpoint omits the native flag, so the value is derived from
+the user's auth labels (authentication provenance, broader than role sync). The
+selector is `userResource(user, nativeFlagAuthoritative)` in
+`pkg/connector/users.go`: Cloud/org-users pass `true`, self-hosted `/api/users`
+pass `false`.
 
 ### Org role provisioning for externally synced users
 

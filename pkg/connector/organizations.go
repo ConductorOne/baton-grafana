@@ -173,9 +173,12 @@ func (o *orgBuilder) Grants(ctx context.Context, parentResource *v2.Resource, _ 
 			continue
 		}
 
-		// Convert UserByOrg to User only when needed
+		// Convert UserByOrg to User only when needed. Both modes feed this from an
+		// org-users endpoint (UserByOrgResponse), which carries the authoritative
+		// native IsExternallySynced flag — so pass true. (Only ur.Id is used for the
+		// grant; the profile is discarded, but the value is kept semantically correct.)
 		user := userByOrg.ToUser()
-		ur, err := userResource(&user)
+		ur, err := userResource(&user, true)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("failed to generate user resource for %s: %w", user.Email, err)
 		}

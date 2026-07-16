@@ -122,7 +122,7 @@ func TestGrantCloud_IdempotentWhenSameRole(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	principal, err := userResource(&grafana.User{ID: 42, Login: "alice", Email: "alice@example.com"})
+	principal, err := userResource(&grafana.User{ID: 42, Login: "alice", Email: "alice@example.com"}, false)
 	if err != nil {
 		t.Fatalf("userResource: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestGrantCloud_RoleChangeSuccess(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	principal, err := userResource(&grafana.User{ID: 42, Login: "alice", Email: "alice@example.com"})
+	principal, err := userResource(&grafana.User{ID: 42, Login: "alice", Email: "alice@example.com"}, false)
 	if err != nil {
 		t.Fatalf("userResource: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestGrantCloud_ExternallySyncedRoleChange(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	principal, err := userResource(&grafana.User{ID: 42, Login: "alice", Email: "alice@example.com"})
+	principal, err := userResource(&grafana.User{ID: 42, Login: "alice", Email: "alice@example.com"}, false)
 	if err != nil {
 		t.Fatalf("userResource: %v", err)
 	}
@@ -275,37 +275,55 @@ func TestRevokeCloud_RemovesUser(t *testing.T) {
 	}
 }
 
-// is_externally_synced comes from the native flag or is derived from auth labels.
+// is_externally_synced comes from the native flag (Cloud/org-users, authoritative)
+// or is derived from auth labels (self-hosted /api/users, where the native flag is
+// omitted). See userResource for the full rationale.
 func TestUserResource_SurfacesExternalSyncOnProfile(t *testing.T) {
 	cases := []struct {
-		name           string
-		user           grafana.User
-		wantSynced     bool
-		wantAuthLabels string
+		name                    string
+		user                    grafana.User
+		nativeFlagAuthoritative bool
+		wantSynced              bool
+		wantAuthLabels          string
 	}{
 		{
-			name:           "cloud flag set",
-			user:           grafana.User{ID: 42, Login: "alice", IsExternallySynced: true, AuthLabels: []string{"grafana.com"}},
-			wantSynced:     true,
-			wantAuthLabels: "grafana.com",
+			name:                    "cloud flag set",
+			user:                    grafana.User{ID: 42, Login: "alice", IsExternallySynced: true, AuthLabels: []string{"grafana.com"}},
+			nativeFlagAuthoritative: true,
+			wantSynced:              true,
+			wantAuthLabels:          "grafana.com",
 		},
 		{
-			name:           "self-hosted derives from auth labels",
-			user:           grafana.User{ID: 43, Login: "keycloak-user", IsExternallySynced: false, AuthLabels: []string{"Generic OAuth"}},
-			wantSynced:     true,
-			wantAuthLabels: "Generic OAuth",
+			// CXH-2063 regression: in Cloud mode every user authenticates through
+			// grafana.com SSO and carries authLabels:["grafana.com"], but the native
+			// IsExternallySynced flag is authoritative. An instance-managed admin whose
+			// native flag is false must report false — the authLabels fallback must NOT
+			// override it (before the fix the OR always yielded true).
+			name:                    "cloud native false with grafana.com auth labels reports false",
+			user:                    grafana.User{ID: 45, Login: "alice.instance", IsExternallySynced: false, AuthLabels: []string{"grafana.com"}},
+			nativeFlagAuthoritative: true,
+			wantSynced:              false,
+			wantAuthLabels:          "grafana.com",
 		},
 		{
-			name:           "local user",
-			user:           grafana.User{ID: 44, Login: "bob"},
-			wantSynced:     false,
-			wantAuthLabels: "",
+			name:                    "self-hosted derives from auth labels",
+			user:                    grafana.User{ID: 43, Login: "keycloak-user", IsExternallySynced: false, AuthLabels: []string{"Generic OAuth"}},
+			nativeFlagAuthoritative: false,
+			wantSynced:              true,
+			wantAuthLabels:          "Generic OAuth",
+		},
+		{
+			name:                    "local user",
+			user:                    grafana.User{ID: 44, Login: "bob"},
+			nativeFlagAuthoritative: false,
+			wantSynced:              false,
+			wantAuthLabels:          "",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r, err := userResource(&tc.user)
+			r, err := userResource(&tc.user, tc.nativeFlagAuthoritative)
 			if err != nil {
 				t.Fatalf("userResource returned unexpected error: %v", err)
 			}

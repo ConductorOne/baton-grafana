@@ -41,18 +41,27 @@ func (u *userBuilder) ResourceType(_ context.Context) *v2.ResourceType {
 }
 
 // userResource creates a Baton resource for a Grafana user.
-func userResource(user *grafana.User) (*v2.Resource, error) {
-	// is_externally_synced surfaces the user's access origin, and its exact meaning
-	// depends on which endpoint fed this user (the conflation is intentional):
-	//   - Cloud (org-users): the native IsExternallySynced flag = the org role is
-	//     managed by an external IdP.
-	//   - Self-hosted (global /api/users): that flag is never returned, so we fall
-	//     back to AuthLabels = the user authenticated via an external module
-	//     (SSO/LDAP/OAuth). This is broader than role-sync, so a locally-managed
-	//     role logging in via SSO also reports true.
-	// Both cases answer "is this access externally originated?", which is the intent.
+//
+// nativeFlagAuthoritative selects how is_externally_synced is derived, because the
+// two list endpoints carry different information (CXH-2063):
+//   - Cloud (org-users, /api/org/users): the response populates the native
+//     IsExternallySynced flag, which is exactly "the org role is managed by an
+//     external IdP". It is authoritative — use it verbatim. The AuthLabels fallback
+//     must NOT be applied here: in Cloud every user authenticates through grafana.com
+//     SSO and carries authLabels:["grafana.com"], so an OR would report true for
+//     every user and defeat the field's purpose (distinguishing IdP-synced access
+//     from access granted locally).
+//   - Self-hosted (global /api/users): the native flag is never returned, so we fall
+//     back to AuthLabels = the user authenticated via an external module
+//     (SSO/LDAP/OAuth). This is broader than role-sync, so a locally-managed role
+//     logging in via SSO also reports true — the documented fallback for a missing
+//     native flag.
+func userResource(user *grafana.User, nativeFlagAuthoritative bool) (*v2.Resource, error) {
 	hasAuthLabels := len(user.AuthLabels) > 0
-	externallySynced := user.IsExternallySynced || hasAuthLabels
+	externallySynced := user.IsExternallySynced
+	if !nativeFlagAuthoritative {
+		externallySynced = externallySynced || hasAuthLabels
+	}
 	profile := map[string]interface{}{
 		"full_name":            user.Name,
 		"login":                user.Login,
@@ -113,7 +122,8 @@ func (u *userBuilder) listCloud(ctx context.Context) ([]*v2.Resource, string, an
 	resources := make([]*v2.Resource, 0, len(orgUsers))
 	for _, orgUser := range orgUsers {
 		user := orgUser.ToUser() // ID preserved: UserByOrgResponse.ID (userId) → User.ID
-		ur, err := userResource(&user)
+		// Cloud org-users returns the authoritative native IsExternallySynced flag.
+		ur, err := userResource(&user, true)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("grafana-connector: cloud: failed to create user resource: %w", err)
 		}
@@ -158,7 +168,8 @@ func (u *userBuilder) listSelfHosted(ctx context.Context, pToken *pagination.Tok
 
 	// Convert users to resources
 	for _, user := range users {
-		ur, err := userResource(&user)
+		// Self-hosted global /api/users omits the native flag — derive from AuthLabels.
+		ur, err := userResource(&user, false)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("failed to create resource for user %s: %w", user.Email, err)
 		}
@@ -354,8 +365,8 @@ func (u *userBuilder) createAccountSelfHosted(
 				}
 			}
 
-			// We found the user, create a resource for them
-			resource, resourceErr := userResource(existingUser)
+			// We found the user, create a resource for them (self-hosted /api/users).
+			resource, resourceErr := userResource(existingUser, false)
 			if resourceErr != nil {
 				l.Error("Failed to create resource for existing user", zap.Error(resourceErr))
 				return nil, nil, nil, fmt.Errorf("grafana-connector: failed to create resource for existing user: %w", resourceErr)
@@ -374,8 +385,8 @@ func (u *userBuilder) createAccountSelfHosted(
 		return nil, nil, nil, fmt.Errorf("grafana-connector: failed to create user: %w", err)
 	}
 
-	// Create a resource from the new user
-	resource, err := userResource(user)
+	// Create a resource from the new user (self-hosted CreateUser response).
+	resource, err := userResource(user, false)
 	if err != nil {
 		l.Error("Failed to create resource for new user", zap.Error(err))
 		return nil, nil, nil, fmt.Errorf("grafana-connector: failed to create resource for new user: %w", err)

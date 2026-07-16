@@ -65,7 +65,7 @@ Starting with connector version 0.2.3, each synced account's profile includes tw
 
 The exact meaning of `is_externally_synced` depends on the connector mode:
 
-* **Grafana Cloud:** the value is Grafana's native `isExternallySynced` flag, meaning the user's organization role is managed by an external identity provider (such as Entra ID or grafana.com SSO).
+* **Grafana Cloud:** the value mirrors Grafana's native `isExternallySynced` flag verbatim. It reflects **only** whether the user's organization role is managed by an external identity provider (role sync) — it is **not** set merely because the user signed in through an external provider. In Grafana Cloud every user authenticates through grafana.com, so `auth_labels` is effectively always `grafana.com`; a user whose organization role is managed locally therefore reports `false` even though their `auth_labels` show `grafana.com`.
 * **Self-hosted Grafana:** Grafana's API does not return that flag for the global user list, so the connector derives the value from the user's authentication labels. `true` means the user authenticated through an external module (SSO, LDAP, or OAuth) — slightly broader than role management: a user whose role is managed locally but who signs in through SSO also reports `true`.
 
 ## Gather Grafana credentials

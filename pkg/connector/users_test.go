@@ -155,6 +155,48 @@ func TestCreateAccountCloud_Non400WithSameMessageIsNotTagged(t *testing.T) {
 	}
 }
 
+// TestListCloud_ExternalSyncMirrorsNativeFlag reproduces CXH-2063 through the Cloud
+// List path: the org-users endpoint returns the authoritative native IsExternallySynced
+// flag, so is_externally_synced must mirror it exactly — even though every Cloud user
+// carries authLabels:["grafana.com"]. Before the fix the authLabels fallback OR'd every
+// user to true, hiding instance-managed access. Mirrors the ticket's TTD-shaped mock:
+// two genuinely IdP-synced identities (native true) and two instance-managed admins
+// (native false), all with grafana.com auth labels.
+func TestListCloud_ExternalSyncMirrorsNativeFlag(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/org/users", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, []grafana.UserByOrgResponse{
+			{ID: 1, Login: "brad.thater", Email: "brad@ttd.com", Role: roleAdmin, IsExternallySynced: true, AuthLabels: []string{"grafana.com"}},
+			{ID: 2, Login: "svc_scim", Email: "scim@ttd.com", Role: roleAdmin, IsExternallySynced: true, AuthLabels: []string{"grafana.com"}},
+			{ID: 3, Login: "alice.instance", Email: "alice@ttd.com", Role: roleAdmin, IsExternallySynced: false, AuthLabels: []string{"grafana.com"}},
+			{ID: 4, Login: "bob.instance", Email: "bob@ttd.com", Role: roleAdmin, IsExternallySynced: false, AuthLabels: []string{"grafana.com"}},
+		})
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	builder := newUserBuilder(newCloudClientForTest(t, ts))
+	resources, _, _, err := builder.List(context.Background(), nil, &pagination.Token{})
+	if err != nil {
+		t.Fatalf("List returned unexpected error: %v", err)
+	}
+	if len(resources) != 4 {
+		t.Fatalf("expected 4 resources, got %d", len(resources))
+	}
+
+	want := map[string]bool{"1": true, "2": true, "3": false, "4": false}
+	for _, r := range resources {
+		ut, err := rs.GetUserTrait(r)
+		if err != nil {
+			t.Fatalf("GetUserTrait for %s: %v", r.Id.Resource, err)
+		}
+		got := ut.GetProfile().GetFields()["is_externally_synced"].GetBoolValue()
+		if got != want[r.Id.Resource] {
+			t.Errorf("user %s (%s): is_externally_synced = %v, want %v", r.Id.Resource, r.DisplayName, got, want[r.Id.Resource])
+		}
+	}
+}
+
 func TestListCloud_ReturnsEmptyForEmptyOrg(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/org/users", func(w http.ResponseWriter, r *http.Request) {
