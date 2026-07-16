@@ -55,6 +55,85 @@ func TestListCloud_CreatesUserResources(t *testing.T) {
 	}
 }
 
+// TestListCloud_ExternalSyncMirrorsNativeFlag checks the Cloud List path: the org-users
+// endpoint returns the native isExternallySynced flag, so is_externally_synced mirrors it
+// exactly even though every user carries authLabels:["grafana.com"]. Two IdP-synced
+// identities (native true) and two instance-managed admins (native false).
+func TestListCloud_ExternalSyncMirrorsNativeFlag(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/org/users", func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, http.StatusOK, []grafana.UserByOrgResponse{
+			{ID: 1, Login: "brad.thater", Email: "brad@ttd.com", Role: roleAdmin, IsExternallySynced: true, AuthLabels: []string{"grafana.com"}},
+			{ID: 2, Login: "svc_scim", Email: "scim@ttd.com", Role: roleAdmin, IsExternallySynced: true, AuthLabels: []string{"grafana.com"}},
+			{ID: 3, Login: "alice.instance", Email: "alice@ttd.com", Role: roleAdmin, IsExternallySynced: false, AuthLabels: []string{"grafana.com"}},
+			{ID: 4, Login: "bob.instance", Email: "bob@ttd.com", Role: roleAdmin, IsExternallySynced: false, AuthLabels: []string{"grafana.com"}},
+		})
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	builder := newUserBuilder(newCloudClientForTest(t, ts))
+	resources, _, _, err := builder.List(context.Background(), nil, &pagination.Token{})
+	if err != nil {
+		t.Fatalf("List returned unexpected error: %v", err)
+	}
+	if len(resources) != 4 {
+		t.Fatalf("expected 4 resources, got %d", len(resources))
+	}
+
+	// The org-users endpoint always returns the flag, so every Cloud user surfaces
+	// is_externally_synced, mirroring the native value exactly.
+	want := map[string]bool{"1": true, "2": true, "3": false, "4": false}
+	for _, r := range resources {
+		ut, err := rs.GetUserTrait(r)
+		if err != nil {
+			t.Fatalf("GetUserTrait for %s: %v", r.Id.Resource, err)
+		}
+		fields := ut.GetProfile().GetFields()
+		if _, present := fields["is_externally_synced"]; !present {
+			t.Errorf("user %s (%s): is_externally_synced missing, want %v", r.Id.Resource, r.DisplayName, want[r.Id.Resource])
+			continue
+		}
+		if got := fields["is_externally_synced"].GetBoolValue(); got != want[r.Id.Resource] {
+			t.Errorf("user %s (%s): is_externally_synced = %v, want %v", r.Id.Resource, r.DisplayName, got, want[r.Id.Resource])
+		}
+	}
+}
+
+// TestListSelfHosted_OmitsExternalSync verifies that in self-hosted mode, where the
+// global /api/users endpoint omits isExternallySynced, the profile leaves the field out.
+func TestListSelfHosted_OmitsExternalSync(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/users", func(w http.ResponseWriter, r *http.Request) {
+		// No isExternallySynced field, matching real /api/users responses.
+		writeJSON(w, http.StatusOK, []grafana.User{
+			{ID: 10, Login: "sso-user", Email: "sso@example.com", AuthLabels: []string{"Generic OAuth"}},
+			{ID: 11, Login: "local-user", Email: "local@example.com"},
+		})
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	builder := newUserBuilder(newSelfHostedClientForTest(t, ts))
+	resources, _, _, err := builder.List(context.Background(), nil, &pagination.Token{})
+	if err != nil {
+		t.Fatalf("List returned unexpected error: %v", err)
+	}
+	if len(resources) != 2 {
+		t.Fatalf("expected 2 resources, got %d", len(resources))
+	}
+
+	for _, r := range resources {
+		ut, err := rs.GetUserTrait(r)
+		if err != nil {
+			t.Fatalf("GetUserTrait for %s: %v", r.Id.Resource, err)
+		}
+		if _, present := ut.GetProfile().GetFields()["is_externally_synced"]; present {
+			t.Errorf("user %s (%s): is_externally_synced present, want absent in self-hosted mode", r.Id.Resource, r.DisplayName)
+		}
+	}
+}
+
 func TestListCloud_DisabledUserHasDisabledStatus(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/org/users", func(w http.ResponseWriter, r *http.Request) {

@@ -54,12 +54,9 @@ type User struct {
 	LastSeenAtAge string   `json:"lastSeenAtAge"`
 	AuthLabels    []string `json:"authLabels"`
 	// IsExternallySynced reports whether the user's org role is managed by an
-	// external IdP. Only the org-users (Cloud) endpoint populates it; the global
-	// /api/users (self-hosted) endpoint omits it, so userResource falls back to
-	// deriving the access origin from AuthLabels (see the note there: the derived
-	// is_externally_synced then means "authenticated via an external module",
-	// which is broader than this role-sync flag).
-	IsExternallySynced bool `json:"isExternallySynced"`
+	// external IdP. Only the org-users endpoint returns it; the global /api/users
+	// endpoint omits it. A pointer so nil ("not returned") is distinct from false.
+	IsExternallySynced *bool `json:"isExternallySynced"`
 }
 
 type UserByOrgResponse struct {

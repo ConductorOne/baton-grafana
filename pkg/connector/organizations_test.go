@@ -25,6 +25,17 @@ func newCloudClientForTest(t *testing.T, ts *httptest.Server) *grafana.Client {
 	return client
 }
 
+// newSelfHostedClientForTest creates a grafana.Client in self-hosted mode (basic auth,
+// no service account token) pointed at ts.
+func newSelfHostedClientForTest(t *testing.T, ts *httptest.Server) *grafana.Client {
+	t.Helper()
+	client, err := grafana.NewClient(context.Background(), ts.URL, "admin", "admin", "")
+	if err != nil {
+		t.Fatalf("newSelfHostedClientForTest: %v", err)
+	}
+	return client
+}
+
 // testOrgEntitlement builds a minimal v2.Entitlement for the given org and role.
 // The ID format "{type}:{orgID}:{role}" matches what Grant/Revoke parse.
 func testOrgEntitlement(orgID, role string) *v2.Entitlement {
@@ -275,30 +286,44 @@ func TestRevokeCloud_RemovesUser(t *testing.T) {
 	}
 }
 
-// is_externally_synced comes from the native flag or is derived from auth labels.
+// is_externally_synced mirrors Grafana's native isExternallySynced flag and is
+// surfaced only when Grafana returns it (IsExternallySynced != nil); it is never
+// derived from auth labels.
 func TestUserResource_SurfacesExternalSyncOnProfile(t *testing.T) {
 	cases := []struct {
 		name           string
 		user           grafana.User
-		wantSynced     bool
+		wantPresent    bool // whether is_externally_synced appears on the profile
+		wantSynced     bool // value when present
 		wantAuthLabels string
 	}{
 		{
-			name:           "cloud flag set",
-			user:           grafana.User{ID: 42, Login: "alice", IsExternallySynced: true, AuthLabels: []string{"grafana.com"}},
+			name:           "native flag true is surfaced",
+			user:           grafana.User{ID: 42, Login: "alice", IsExternallySynced: boolPtr(true), AuthLabels: []string{"grafana.com"}},
+			wantPresent:    true,
 			wantSynced:     true,
 			wantAuthLabels: "grafana.com",
 		},
 		{
-			name:           "self-hosted derives from auth labels",
-			user:           grafana.User{ID: 43, Login: "keycloak-user", IsExternallySynced: false, AuthLabels: []string{"Generic OAuth"}},
-			wantSynced:     true,
+			// Cloud users all carry grafana.com auth labels, but an instance-managed
+			// admin's native flag is false and must report false.
+			name:           "native flag false with grafana.com auth labels reports false",
+			user:           grafana.User{ID: 45, Login: "alice.instance", IsExternallySynced: boolPtr(false), AuthLabels: []string{"grafana.com"}},
+			wantPresent:    true,
+			wantSynced:     false,
+			wantAuthLabels: "grafana.com",
+		},
+		{
+			// Self-hosted /api/users omits the flag; the field is absent (auth_labels stays).
+			name:           "self-hosted omits the field even with auth labels",
+			user:           grafana.User{ID: 43, Login: "keycloak-user", IsExternallySynced: nil, AuthLabels: []string{"Generic OAuth"}},
+			wantPresent:    false,
 			wantAuthLabels: "Generic OAuth",
 		},
 		{
-			name:           "local user",
+			name:           "local self-hosted user omits the field",
 			user:           grafana.User{ID: 44, Login: "bob"},
-			wantSynced:     false,
+			wantPresent:    false,
 			wantAuthLabels: "",
 		},
 	}
@@ -316,8 +341,13 @@ func TestUserResource_SurfacesExternalSyncOnProfile(t *testing.T) {
 				t.Fatalf("user resource missing UserTrait (ok=%v, err=%v)", ok, err)
 			}
 			fields := ut.GetProfile().GetFields()
-			if got := fields["is_externally_synced"].GetBoolValue(); got != tc.wantSynced {
-				t.Errorf("is_externally_synced = %v, want %v", got, tc.wantSynced)
+			if _, present := fields["is_externally_synced"]; present != tc.wantPresent {
+				t.Errorf("is_externally_synced present = %v, want %v", present, tc.wantPresent)
+			}
+			if tc.wantPresent {
+				if got := fields["is_externally_synced"].GetBoolValue(); got != tc.wantSynced {
+					t.Errorf("is_externally_synced = %v, want %v", got, tc.wantSynced)
+				}
 			}
 			if got := fields["auth_labels"].GetStringValue(); got != tc.wantAuthLabels {
 				t.Errorf("auth_labels = %q, want %q", got, tc.wantAuthLabels)
@@ -325,3 +355,6 @@ func TestUserResource_SurfacesExternalSyncOnProfile(t *testing.T) {
 		})
 	}
 }
+
+// boolPtr returns a pointer to b, for populating grafana.User.IsExternallySynced.
+func boolPtr(b bool) *bool { return &b }

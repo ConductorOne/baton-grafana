@@ -42,25 +42,20 @@ func (u *userBuilder) ResourceType(_ context.Context) *v2.ResourceType {
 
 // userResource creates a Baton resource for a Grafana user.
 func userResource(user *grafana.User) (*v2.Resource, error) {
-	// is_externally_synced surfaces the user's access origin, and its exact meaning
-	// depends on which endpoint fed this user (the conflation is intentional):
-	//   - Cloud (org-users): the native IsExternallySynced flag = the org role is
-	//     managed by an external IdP.
-	//   - Self-hosted (global /api/users): that flag is never returned, so we fall
-	//     back to AuthLabels = the user authenticated via an external module
-	//     (SSO/LDAP/OAuth). This is broader than role-sync, so a locally-managed
-	//     role logging in via SSO also reports true.
-	// Both cases answer "is this access externally originated?", which is the intent.
-	hasAuthLabels := len(user.AuthLabels) > 0
-	externallySynced := user.IsExternallySynced || hasAuthLabels
 	profile := map[string]interface{}{
-		"full_name":            user.Name,
-		"login":                user.Login,
-		"user_id":              user.ID,
-		"email":                user.Email,
-		"is_externally_synced": externallySynced,
+		"full_name": user.Name,
+		"login":     user.Login,
+		"user_id":   user.ID,
+		"email":     user.Email,
 	}
-	if hasAuthLabels {
+	// is_externally_synced mirrors Grafana's native isExternallySynced flag, surfaced
+	// only when Grafana returns it (org-users always does; global /api/users never does).
+	// It is not derived from AuthLabels, which is a different concept (external
+	// authentication) and true for every Grafana Cloud user.
+	if user.IsExternallySynced != nil {
+		profile["is_externally_synced"] = *user.IsExternallySynced
+	}
+	if len(user.AuthLabels) > 0 {
 		// "; " (not ",") because a Grafana auth label may itself contain a comma.
 		profile["auth_labels"] = strings.Join(user.AuthLabels, "; ")
 	}

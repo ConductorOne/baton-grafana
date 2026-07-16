@@ -60,13 +60,13 @@ Starting with connector version 0.2.3, each synced account's profile includes tw
 
 | Attribute | Type | Present | Meaning |
 | :--- | :--- | :--- | :--- |
-| `is_externally_synced` | Boolean | Always | `true` when the user's access originates from an external identity provider; `false` for users managed locally in Grafana. |
+| `is_externally_synced` | Boolean | When Grafana returns it (see below) | `true` when the user's organization role is managed by an external identity provider; `false` when the role is managed locally in Grafana. |
 | `auth_labels` | String | Externally authenticated users only | The external authentication provider(s) associated with the user (for example, `grafana.com` or an OAuth/SAML provider name), joined with `; ` when there is more than one. Absent — not an empty string — for local users. |
 
-The exact meaning of `is_externally_synced` depends on the connector mode:
+`is_externally_synced` is Grafana's native `isExternallySynced` flag, meaning the user's organization role is managed by an external identity provider (such as Entra ID or grafana.com SSO). It is surfaced only when Grafana returns the flag, which depends on the connector mode:
 
-* **Grafana Cloud:** the value is Grafana's native `isExternallySynced` flag, meaning the user's organization role is managed by an external identity provider (such as Entra ID or grafana.com SSO).
-* **Self-hosted Grafana:** Grafana's API does not return that flag for the global user list, so the connector derives the value from the user's authentication labels. `true` means the user authenticated through an external module (SSO, LDAP, or OAuth) — slightly broader than role management: a user whose role is managed locally but who signs in through SSO also reports `true`.
+* **Grafana Cloud:** the org-users endpoint returns the flag, so the attribute is always present and mirrors Grafana's value exactly. Note that in Cloud every user authenticates through grafana.com (so `auth_labels` is effectively always `grafana.com`); a user whose organization role is managed locally still reports `false`.
+* **Self-hosted Grafana:** the global user list endpoint does not return the flag, so the connector cannot determine role sync and omits the attribute entirely. Use `auth_labels` to see how these users authenticated.
 
 ## Gather Grafana credentials
 
