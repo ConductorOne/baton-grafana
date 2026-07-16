@@ -36,6 +36,14 @@ const (
 // ErrUserAlreadyExists is returned when attempting to create a user that already exists in Grafana.
 var ErrUserAlreadyExists = errors.New("grafana-client: user already exists")
 
+// ErrExternalUserLoginDisabled is returned when POST /api/org/invites rejects a
+// brand-new external user because the instance's basic login form is disabled.
+// This is the Grafana Cloud default (users authenticate via SSO / grafana.com),
+// so instance-level invites for non-existing users are rejected with HTTP 400
+// "Cannot invite external user when login is disabled." Existing users are added
+// to the org without hitting this check.
+var ErrExternalUserLoginDisabled = errors.New("grafana-client: cannot invite external user when login is disabled")
+
 // NewClient initializes a new Grafana API client.
 // When apiToken is non-empty the client operates in Cloud mode (Bearer auth).
 // When apiToken is empty the client operates in self-hosted mode (Basic auth).
@@ -419,6 +427,15 @@ func (c *Client) InviteUserToOrg(ctx context.Context, req *InviteUserRequest) (*
 
 	err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(InviteUserPath), &resp, req, nil)
 	if err != nil {
+		// Grafana rejects invites for brand-new external users when the basic
+		// login form is disabled (the Grafana Cloud default). Gate on the 400
+		// status (like the 412 check for ErrUserAlreadyExists) plus the message
+		// so an unrelated error carrying the same phrase isn't mis-tagged; a
+		// reworded message just falls through to the generic error below.
+		if strings.Contains(err.Error(), fmt.Sprintf("%d", http.StatusBadRequest)) &&
+			strings.Contains(err.Error(), "login is disabled") {
+			return nil, fmt.Errorf("%w: %w", ErrExternalUserLoginDisabled, err)
+		}
 		return nil, fmt.Errorf("grafana-client: invite user to org: %w", err)
 	}
 

@@ -19,6 +19,25 @@ The Grafana connector supports [automatic account provisioning and deprovisionin
 
 For self-hosted Grafana, when a new account is created by C1, the account's password is sent to a [vault](/product/admin/vaults).
 For Grafana Cloud, account creation is invite-based and no connector-generated password is returned.
+<Warning>
+**Grafana Cloud: enabling the basic login form is a prerequisite for creating brand-new users**
+
+Grafana Cloud instances ship with the basic login form **disabled** by default (users authenticate through grafana.com / SSO). While it is disabled, Grafana rejects instance-level invites for users who do not yet exist in the instance, and account creation fails with:
+
+```
+Cannot invite external user when login is disabled.
+```
+
+With the service-account token the connector uses, this means:
+
+* **Users who already exist in the instance** (provisioned earlier via SSO, SCIM, or grafana.com) are added to the organization normally — account provisioning works for them without any change.
+* **Brand-new users** cannot be created until you either:
+  * enable [SCIM provisioning](https://grafana.com/docs/grafana/latest/setup-grafana/configure-access/configure-scim-provisioning/) (Grafana's recommended path for automatic user lifecycle in Cloud), so users are provisioned by your identity provider before C1 assigns organization roles; or
+  * enable the basic login form on the instance (set `disable_login_form = false`), which permits instance-level invites for external users.
+
+Managing membership directly through the grafana.com portal is a separate API and credential (a Grafana Cloud Access Policy token) that the connector's instance service-account token cannot use.
+</Warning>
+
 <Note>
 **Grafana Cloud: provisioning organization roles for externally synced users**
 
