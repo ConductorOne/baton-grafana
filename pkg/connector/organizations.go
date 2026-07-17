@@ -76,7 +76,7 @@ func (o *orgBuilder) listCloud(ctx context.Context) ([]*v2.Resource, string, ann
 
 // listSelfHosted is the original List logic for self-hosted Grafana — unchanged.
 func (o *orgBuilder) listSelfHosted(ctx context.Context, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
-	// Parse pagination token. If Token is an empty string, the function returns 0.
+	// Parse pagination token. If Token is an empty string, the function returns 1 (the first page).
 	bag, page, err := parsePageToken(pToken, &v2.ResourceId{ResourceType: resourceTypeOrg.Id})
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("failed to parse page token: %w", err)
