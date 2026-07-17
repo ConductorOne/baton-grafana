@@ -95,7 +95,7 @@ func (g *Grafana) Validate(ctx context.Context) (annotations.Annotations, error)
 		// Self-hosted mode: original validation via server-admin endpoint
 		paginationOpts := grafana.PaginationVars{
 			Size: 1,
-			Page: 0,
+			Page: 1,
 		}
 		_, _, err := g.client.ListOrganizations(ctx, &paginationOpts)
 		if err != nil {

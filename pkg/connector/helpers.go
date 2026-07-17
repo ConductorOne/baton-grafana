@@ -25,8 +25,10 @@ func annotationsForUserResourceType() annotations.Annotations {
 	return annos
 }
 
-// If pagToken.Token is an empty string, the function returns 0,
-// as page 0 is considered the first page.
+// If pagToken.Token is an empty string, the function returns 1, the first page.
+// Grafana's list endpoints are 1-based: page=1 is the first page and page=0 is
+// treated as page one as well. Starting at 1 (rather than 0) avoids fetching the
+// first page twice, since nextPage is derived as page+1 (CXH-2013).
 func parsePageToken(pagToken *pagination.Token, resourceID *v2.ResourceId) (*pagination.Bag, uint64, error) {
 	bag := &pagination.Bag{}
 	err := bag.Unmarshal(pagToken.Token)
@@ -34,7 +36,7 @@ func parsePageToken(pagToken *pagination.Token, resourceID *v2.ResourceId) (*pag
 		return nil, 0, err
 	}
 
-	var page uint64
+	page := uint64(1)
 
 	if bag.Current() == nil {
 		// If no current page state, push a new one for the provided resource.
