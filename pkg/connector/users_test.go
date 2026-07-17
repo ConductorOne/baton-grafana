@@ -155,8 +155,8 @@ func TestCreateAccountCloud_Non400WithSameMessageIsNotTagged(t *testing.T) {
 	}
 }
 
-// TestListCloud_ExternalSyncMirrorsNativeFlag reproduces CXH-2063 through the Cloud
-// List path. The org-users endpoint returns the authoritative native IsExternallySynced
+// TestListCloud_ExternalSyncMirrorsNativeFlag exercises the Cloud List path.
+// The org-users endpoint returns the authoritative native IsExternallySynced
 // flag, so is_externally_synced must mirror it exactly — even though every Cloud user
 // carries authLabels:["grafana.com"]. Before the fix the authLabels OR'd every user to
 // true, hiding instance-managed access. Mirrors the ticket's TTD-shaped mock: two
@@ -199,6 +199,49 @@ func TestListCloud_ExternalSyncMirrorsNativeFlag(t *testing.T) {
 		}
 		if got := fields["is_externally_synced"].GetBoolValue(); got != want[r.Id.Resource] {
 			t.Errorf("user %s (%s): is_externally_synced = %v, want %v", r.Id.Resource, r.DisplayName, got, want[r.Id.Resource])
+		}
+	}
+}
+
+// TestListSelfHosted_OmitsExternalSyncFromRawJSON pins the JSON-to-*bool half of the
+// contract that the *bool exists for: it drives the self-hosted List path
+// against a raw /api/users body that OMITS the isExternallySynced key (the real
+// shape — verified against Grafana OSS). The key's absence must decode to a nil
+// pointer, so userResource leaves is_externally_synced off the profile. auth_labels
+// is unaffected — surfaced when present. (QE note on PR #76.)
+func TestListSelfHosted_OmitsExternalSyncFromRawJSON(t *testing.T) {
+	mux := http.NewServeMux()
+	// Bare /api/users array with NO isExternallySynced key on any object.
+	mux.HandleFunc("/api/users", func(w http.ResponseWriter, r *http.Request) {
+		writeRaw(w, http.StatusOK, `[
+			{"id":1,"login":"admin","email":"admin@localhost","name":"","isAdmin":true,"isDisabled":false,"authLabels":[]},
+			{"id":2,"login":"sso.user","email":"sso@localhost","name":"SSO User","isDisabled":false,"authLabels":["Generic OAuth"]}
+		]`)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	builder := newUserBuilder(newSelfHostedClientForTest(t, ts))
+	resources, _, _, err := builder.List(context.Background(), nil, &pagination.Token{})
+	if err != nil {
+		t.Fatalf("List returned unexpected error: %v", err)
+	}
+	if len(resources) != 2 {
+		t.Fatalf("expected 2 resources, got %d", len(resources))
+	}
+
+	wantAuthLabels := map[string]string{"1": "", "2": "Generic OAuth"}
+	for _, r := range resources {
+		ut, err := rs.GetUserTrait(r)
+		if err != nil {
+			t.Fatalf("GetUserTrait for %s: %v", r.Id.Resource, err)
+		}
+		fields := ut.GetProfile().GetFields()
+		if _, present := fields["is_externally_synced"]; present {
+			t.Errorf("user %s: is_externally_synced must be absent when /api/users omits the key (nil *bool), got present", r.Id.Resource)
+		}
+		if got := fields["auth_labels"].GetStringValue(); got != wantAuthLabels[r.Id.Resource] {
+			t.Errorf("user %s: auth_labels = %q, want %q", r.Id.Resource, got, wantAuthLabels[r.Id.Resource])
 		}
 	}
 }

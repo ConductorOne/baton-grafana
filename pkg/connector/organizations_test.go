@@ -52,11 +52,30 @@ func testGrant(userID, orgID, role string) *v2.Grant {
 	}
 }
 
+// newSelfHostedClientForTest creates a grafana.Client in self-hosted mode (basic auth,
+// empty apiToken so IsCloud() is false) pointed at ts.
+func newSelfHostedClientForTest(t *testing.T, ts *httptest.Server) *grafana.Client {
+	t.Helper()
+	client, err := grafana.NewClient(context.Background(), ts.URL, "admin", "admin", "")
+	if err != nil {
+		t.Fatalf("newSelfHostedClientForTest: %v", err)
+	}
+	return client
+}
+
 // writeJSON writes data as JSON with the given HTTP status code.
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(data)
+}
+
+// writeRaw writes a raw JSON body verbatim, for when a test must control the exact wire
+// shape — e.g. a key being absent from the object, not just present with its zero value.
+func writeRaw(w http.ResponseWriter, status int, body string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(body))
 }
 
 // ---------------------------------------------------------------------------
@@ -278,7 +297,7 @@ func TestRevokeCloud_RemovesUser(t *testing.T) {
 // is_externally_synced surfaces Grafana's native isExternallySynced flag verbatim and
 // ONLY when Grafana returns it (User.IsExternallySynced != nil). It is never derived
 // from auth labels: an instance-managed Cloud admin with native false and
-// authLabels:["grafana.com"] reports false (the CXH-2063 fix), and a self-hosted user
+// authLabels:["grafana.com"] reports false, and a self-hosted user
 // whose /api/users response omits the flag has the field left off the profile entirely.
 // See userResource for the full rationale.
 func TestUserResource_SurfacesExternalSyncOnProfile(t *testing.T) {
@@ -299,7 +318,7 @@ func TestUserResource_SurfacesExternalSyncOnProfile(t *testing.T) {
 			wantAuthLabels:    "grafana.com",
 		},
 		{
-			// CXH-2063 core: in Cloud every user authenticates through grafana.com SSO and
+			// Core case: in Cloud every user authenticates through grafana.com SSO and
 			// carries authLabels:["grafana.com"], but an instance-managed admin's native flag
 			// is false. The field must mirror the native flag (false), NOT be OR'd to true by
 			// the auth labels (the pre-fix bug).

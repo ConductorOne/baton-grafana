@@ -138,7 +138,7 @@ connector uses, so it is not an option from within the connector.
 Each synced user profile carries `is_externally_synced` and `auth_labels` to indicate
 the origin of the user's access (see `connector.mdx` → "Account access origin").
 
-`is_externally_synced` (CXH-2063) surfaces Grafana's native `isExternallySynced` flag
+`is_externally_synced` surfaces Grafana's native `isExternallySynced` flag
 verbatim — "the user's org role is managed by an external IdP (role sync)" — and only
 when Grafana returns it. It is NOT derived from `auth_labels`, which is a different
 concept ("the user authenticated via an external module") and is true for every

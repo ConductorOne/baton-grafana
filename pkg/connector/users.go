@@ -44,7 +44,7 @@ func (u *userBuilder) ResourceType(_ context.Context) *v2.ResourceType {
 //
 // is_externally_synced surfaces Grafana's native isExternallySynced flag verbatim —
 // "the user's org role is managed by an external IdP (role sync)" — and only when
-// Grafana actually returns it (CXH-2063):
+// Grafana actually returns it:
 //
 //   - Cloud (org-users, /api/org/users): the endpoint always returns the flag, so
 //     the field is present and mirrors Grafana's value exactly.
