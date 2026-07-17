@@ -122,7 +122,7 @@ func TestGrantCloud_IdempotentWhenSameRole(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	principal, err := userResource(&grafana.User{ID: 42, Login: "alice", Email: "alice@example.com"}, false)
+	principal, err := userResource(&grafana.User{ID: 42, Login: "alice", Email: "alice@example.com"})
 	if err != nil {
 		t.Fatalf("userResource: %v", err)
 	}
@@ -159,7 +159,7 @@ func TestGrantCloud_RoleChangeSuccess(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	principal, err := userResource(&grafana.User{ID: 42, Login: "alice", Email: "alice@example.com"}, false)
+	principal, err := userResource(&grafana.User{ID: 42, Login: "alice", Email: "alice@example.com"})
 	if err != nil {
 		t.Fatalf("userResource: %v", err)
 	}
@@ -200,7 +200,7 @@ func TestGrantCloud_ExternallySyncedRoleChange(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	principal, err := userResource(&grafana.User{ID: 42, Login: "alice", Email: "alice@example.com"}, false)
+	principal, err := userResource(&grafana.User{ID: 42, Login: "alice", Email: "alice@example.com"})
 	if err != nil {
 		t.Fatalf("userResource: %v", err)
 	}
@@ -275,55 +275,60 @@ func TestRevokeCloud_RemovesUser(t *testing.T) {
 	}
 }
 
-// is_externally_synced comes from the native flag (Cloud/org-users, authoritative)
-// or is derived from auth labels (self-hosted /api/users, where the native flag is
-// omitted). See userResource for the full rationale.
+// is_externally_synced surfaces Grafana's native isExternallySynced flag verbatim and
+// ONLY when Grafana returns it (User.IsExternallySynced != nil). It is never derived
+// from auth labels: an instance-managed Cloud admin with native false and
+// authLabels:["grafana.com"] reports false (the CXH-2063 fix), and a self-hosted user
+// whose /api/users response omits the flag has the field left off the profile entirely.
+// See userResource for the full rationale.
 func TestUserResource_SurfacesExternalSyncOnProfile(t *testing.T) {
+	bp := func(b bool) *bool { return &b }
 	cases := []struct {
-		name                    string
-		user                    grafana.User
-		nativeFlagAuthoritative bool
-		wantSynced              bool
-		wantAuthLabels          string
+		name              string
+		user              grafana.User
+		wantSyncedPresent bool
+		wantSynced        bool
+		wantAuthLabels    string
 	}{
 		{
-			name:                    "cloud flag set",
-			user:                    grafana.User{ID: 42, Login: "alice", IsExternallySynced: true, AuthLabels: []string{"grafana.com"}},
-			nativeFlagAuthoritative: true,
-			wantSynced:              true,
-			wantAuthLabels:          "grafana.com",
+			// Cloud, org role managed by an external IdP: native flag true → surfaced true.
+			name:              "cloud native true",
+			user:              grafana.User{ID: 42, Login: "alice", IsExternallySynced: bp(true), AuthLabels: []string{"grafana.com"}},
+			wantSyncedPresent: true,
+			wantSynced:        true,
+			wantAuthLabels:    "grafana.com",
 		},
 		{
-			// CXH-2063 regression: in Cloud mode every user authenticates through
-			// grafana.com SSO and carries authLabels:["grafana.com"], but the native
-			// IsExternallySynced flag is authoritative. An instance-managed admin whose
-			// native flag is false must report false — the authLabels fallback must NOT
-			// override it (before the fix the OR always yielded true).
-			name:                    "cloud native false with grafana.com auth labels reports false",
-			user:                    grafana.User{ID: 45, Login: "alice.instance", IsExternallySynced: false, AuthLabels: []string{"grafana.com"}},
-			nativeFlagAuthoritative: true,
-			wantSynced:              false,
-			wantAuthLabels:          "grafana.com",
+			// CXH-2063 core: in Cloud every user authenticates through grafana.com SSO and
+			// carries authLabels:["grafana.com"], but an instance-managed admin's native flag
+			// is false. The field must mirror the native flag (false), NOT be OR'd to true by
+			// the auth labels (the pre-fix bug).
+			name:              "cloud native false with grafana.com auth labels reports false",
+			user:              grafana.User{ID: 45, Login: "alice.instance", IsExternallySynced: bp(false), AuthLabels: []string{"grafana.com"}},
+			wantSyncedPresent: true,
+			wantSynced:        false,
+			wantAuthLabels:    "grafana.com",
 		},
 		{
-			name:                    "self-hosted derives from auth labels",
-			user:                    grafana.User{ID: 43, Login: "keycloak-user", IsExternallySynced: false, AuthLabels: []string{"Generic OAuth"}},
-			nativeFlagAuthoritative: false,
-			wantSynced:              true,
-			wantAuthLabels:          "Generic OAuth",
+			// Self-hosted: /api/users omits the native flag (nil pointer) → field absent.
+			// auth_labels is still surfaced separately (it is a different signal).
+			name:              "self-hosted flag absent, field omitted",
+			user:              grafana.User{ID: 43, Login: "keycloak-user", IsExternallySynced: nil, AuthLabels: []string{"Generic OAuth"}},
+			wantSyncedPresent: false,
+			wantAuthLabels:    "Generic OAuth",
 		},
 		{
-			name:                    "local user",
-			user:                    grafana.User{ID: 44, Login: "bob"},
-			nativeFlagAuthoritative: false,
-			wantSynced:              false,
-			wantAuthLabels:          "",
+			// Self-hosted local user: no flag, no auth labels → neither field present.
+			name:              "self-hosted local user, both absent",
+			user:              grafana.User{ID: 44, Login: "bob", IsExternallySynced: nil},
+			wantSyncedPresent: false,
+			wantAuthLabels:    "",
 		},
 	}
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r, err := userResource(&tc.user, tc.nativeFlagAuthoritative)
+			r, err := userResource(&tc.user)
 			if err != nil {
 				t.Fatalf("userResource returned unexpected error: %v", err)
 			}
@@ -334,8 +339,13 @@ func TestUserResource_SurfacesExternalSyncOnProfile(t *testing.T) {
 				t.Fatalf("user resource missing UserTrait (ok=%v, err=%v)", ok, err)
 			}
 			fields := ut.GetProfile().GetFields()
-			if got := fields["is_externally_synced"].GetBoolValue(); got != tc.wantSynced {
-				t.Errorf("is_externally_synced = %v, want %v", got, tc.wantSynced)
+			if _, present := fields["is_externally_synced"]; present != tc.wantSyncedPresent {
+				t.Errorf("is_externally_synced present = %v, want %v", present, tc.wantSyncedPresent)
+			}
+			if tc.wantSyncedPresent {
+				if got := fields["is_externally_synced"].GetBoolValue(); got != tc.wantSynced {
+					t.Errorf("is_externally_synced = %v, want %v", got, tc.wantSynced)
+				}
 			}
 			if got := fields["auth_labels"].GetStringValue(); got != tc.wantAuthLabels {
 				t.Errorf("auth_labels = %q, want %q", got, tc.wantAuthLabels)

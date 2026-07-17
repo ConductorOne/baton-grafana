@@ -156,12 +156,12 @@ func TestCreateAccountCloud_Non400WithSameMessageIsNotTagged(t *testing.T) {
 }
 
 // TestListCloud_ExternalSyncMirrorsNativeFlag reproduces CXH-2063 through the Cloud
-// List path: the org-users endpoint returns the authoritative native IsExternallySynced
+// List path. The org-users endpoint returns the authoritative native IsExternallySynced
 // flag, so is_externally_synced must mirror it exactly — even though every Cloud user
-// carries authLabels:["grafana.com"]. Before the fix the authLabels fallback OR'd every
-// user to true, hiding instance-managed access. Mirrors the ticket's TTD-shaped mock:
-// two genuinely IdP-synced identities (native true) and two instance-managed admins
-// (native false), all with grafana.com auth labels.
+// carries authLabels:["grafana.com"]. Before the fix the authLabels OR'd every user to
+// true, hiding instance-managed access. Mirrors the ticket's TTD-shaped mock: two
+// genuinely IdP-synced identities (native true) and two instance-managed admins (native
+// false), all with grafana.com auth labels.
 func TestListCloud_ExternalSyncMirrorsNativeFlag(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/org/users", func(w http.ResponseWriter, r *http.Request) {
@@ -184,14 +184,20 @@ func TestListCloud_ExternalSyncMirrorsNativeFlag(t *testing.T) {
 		t.Fatalf("expected 4 resources, got %d", len(resources))
 	}
 
+	// is_externally_synced mirrors the native flag verbatim: instance-managed admins
+	// report false even though they carry grafana.com auth labels.
 	want := map[string]bool{"1": true, "2": true, "3": false, "4": false}
 	for _, r := range resources {
 		ut, err := rs.GetUserTrait(r)
 		if err != nil {
 			t.Fatalf("GetUserTrait for %s: %v", r.Id.Resource, err)
 		}
-		got := ut.GetProfile().GetFields()["is_externally_synced"].GetBoolValue()
-		if got != want[r.Id.Resource] {
+		fields := ut.GetProfile().GetFields()
+		if _, present := fields["is_externally_synced"]; !present {
+			t.Errorf("user %s (%s): is_externally_synced missing; Cloud org-users always returns the flag", r.Id.Resource, r.DisplayName)
+			continue
+		}
+		if got := fields["is_externally_synced"].GetBoolValue(); got != want[r.Id.Resource] {
 			t.Errorf("user %s (%s): is_externally_synced = %v, want %v", r.Id.Resource, r.DisplayName, got, want[r.Id.Resource])
 		}
 	}

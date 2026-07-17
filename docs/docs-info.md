@@ -135,17 +135,25 @@ connector uses, so it is not an option from within the connector.
 
 ### Access origin attributes
 
-Each synced user profile carries `is_externally_synced` and `auth_labels` to
-indicate the origin of the user's access (see `connector.mdx` → "Account access
-origin"). In Cloud the value mirrors Grafana's native `isExternallySynced` flag
-verbatim (external role sync) — the `auth_labels` fallback is deliberately NOT
-applied there, because every Cloud user authenticates through grafana.com and the
-fallback would otherwise report `true` for everyone (CXH-2063). In self-hosted the
-global `/api/users` endpoint omits the native flag, so the value is derived from
-the user's auth labels (authentication provenance, broader than role sync). The
-selector is `userResource(user, nativeFlagAuthoritative)` in
-`pkg/connector/users.go`: Cloud/org-users pass `true`, self-hosted `/api/users`
-pass `false`.
+Each synced user profile carries `is_externally_synced` and `auth_labels` to indicate
+the origin of the user's access (see `connector.mdx` → "Account access origin").
+
+`is_externally_synced` (CXH-2063) surfaces Grafana's native `isExternallySynced` flag
+verbatim — "the user's org role is managed by an external IdP (role sync)" — and only
+when Grafana returns it. It is NOT derived from `auth_labels`, which is a different
+concept ("the user authenticated via an external module") and is true for every
+Grafana Cloud user (all carry `authLabels:["grafana.com"]`); OR-ing it in reported
+`true` for every Cloud user and defeated the field's purpose. With the native flag
+used verbatim, an instance-managed Cloud admin reports `false` even with
+`auth_labels:["grafana.com"]`.
+
+Whether the flag is present depends on the endpoint each mode reads, verified against
+the live API: the Cloud org-users endpoint (`/api/org/users`) always returns the key,
+so `is_externally_synced` is emitted and mirrors Grafana's value; the self-hosted
+global users endpoint (`/api/users`) omits the key entirely, so the native flag on the
+`grafana.User` model decodes to `nil` (a `*bool` distinguishes "not returned" from
+`false`) and `userResource` leaves the field off the profile rather than deriving a
+value from a different concept.
 
 ### Org role provisioning for externally synced users
 

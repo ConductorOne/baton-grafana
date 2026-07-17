@@ -276,7 +276,8 @@ func (ubo UserByOrgResponse) ToUser() User {
 		LastSeenAt:         ubo.LastSeenAt,
 		LastSeenAtAge:      ubo.LastSeenAtAge,
 		AuthLabels:         ubo.AuthLabels,
-		IsExternallySynced: ubo.IsExternallySynced,
+		// org-users always returns isExternallySynced, so the pointer is always non-nil here.
+		IsExternallySynced: &ubo.IsExternallySynced,
 	}
 }
 
