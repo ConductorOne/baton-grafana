@@ -306,7 +306,8 @@ func (c *Client) GetUserByID(ctx context.Context, userID int) (*User, error) {
 
 // GetUserByLoginOrEmail searches for a user by login or email in the first page of results.
 func (c *Client) GetUserByLoginOrEmail(ctx context.Context, loginOrEmail string) (*User, error) {
-	// Use a small page size to minimize data transfer. Page 1 is Grafana's first page.
+	// Use a small page size to minimize data transfer. /api/users is 1-based, so
+	// page 1 is the first page.
 	paginationVars := &PaginationVars{
 		Size: 100,
 		Page: 1,
