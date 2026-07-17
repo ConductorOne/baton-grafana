@@ -276,7 +276,12 @@ func (ubo UserByOrgResponse) ToUser() User {
 		LastSeenAt:         ubo.LastSeenAt,
 		LastSeenAtAge:      ubo.LastSeenAtAge,
 		AuthLabels:         ubo.AuthLabels,
-		IsExternallySynced: ubo.IsExternallySynced,
+		// UserByOrgResponse.IsExternallySynced is a plain bool, so this pointer is non-nil
+		// by construction, independent of the API. It carries a meaningful value only on the
+		// Cloud List path (/api/org/users, which populates the key); ToUser() is also used on
+		// the org Grants path, but there userResource's profile is discarded (only the ID is
+		// used), so the emitted is_externally_synced there is never read.
+		IsExternallySynced: &ubo.IsExternallySynced,
 	}
 }
 

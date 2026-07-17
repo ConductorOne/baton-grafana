@@ -41,24 +41,32 @@ func (u *userBuilder) ResourceType(_ context.Context) *v2.ResourceType {
 }
 
 // userResource creates a Baton resource for a Grafana user.
+//
+// is_externally_synced surfaces Grafana's native isExternallySynced flag verbatim —
+// "the user's org role is managed by an external IdP (role sync)" — and only when
+// Grafana actually returns it:
+//
+//   - Cloud (org-users, /api/org/users): the endpoint always returns the flag, so
+//     the field is present and mirrors Grafana's value exactly.
+//   - Self-hosted (global /api/users): the endpoint omits the flag, so User.
+//     IsExternallySynced is nil and the field is left off the profile entirely.
+//
+// The value is NOT derived from AuthLabels. AuthLabels ("the user authenticated via
+// an external module") is a different concept and is true for every Grafana Cloud
+// user (all carry authLabels:["grafana.com"]); OR-ing it in reported true for every
+// Cloud user and defeated the field's purpose. auth_labels is surfaced separately.
 func userResource(user *grafana.User) (*v2.Resource, error) {
-	// is_externally_synced surfaces the user's access origin, and its exact meaning
-	// depends on which endpoint fed this user (the conflation is intentional):
-	//   - Cloud (org-users): the native IsExternallySynced flag = the org role is
-	//     managed by an external IdP.
-	//   - Self-hosted (global /api/users): that flag is never returned, so we fall
-	//     back to AuthLabels = the user authenticated via an external module
-	//     (SSO/LDAP/OAuth). This is broader than role-sync, so a locally-managed
-	//     role logging in via SSO also reports true.
-	// Both cases answer "is this access externally originated?", which is the intent.
 	hasAuthLabels := len(user.AuthLabels) > 0
-	externallySynced := user.IsExternallySynced || hasAuthLabels
 	profile := map[string]interface{}{
-		"full_name":            user.Name,
-		"login":                user.Login,
-		"user_id":              user.ID,
-		"email":                user.Email,
-		"is_externally_synced": externallySynced,
+		"full_name": user.Name,
+		"login":     user.Login,
+		"user_id":   user.ID,
+		"email":     user.Email,
+	}
+	// Surface the native flag only when Grafana returned it; a value we don't have
+	// is omitted rather than derived from a different concept (AuthLabels).
+	if user.IsExternallySynced != nil {
+		profile["is_externally_synced"] = *user.IsExternallySynced
 	}
 	if hasAuthLabels {
 		// "; " (not ",") because a Grafana auth label may itself contain a comma.
@@ -158,6 +166,7 @@ func (u *userBuilder) listSelfHosted(ctx context.Context, pToken *pagination.Tok
 
 	// Convert users to resources
 	for _, user := range users {
+		// Self-hosted global /api/users omits the native flag — is_externally_synced is omitted.
 		ur, err := userResource(&user)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("failed to create resource for user %s: %w", user.Email, err)
@@ -354,7 +363,7 @@ func (u *userBuilder) createAccountSelfHosted(
 				}
 			}
 
-			// We found the user, create a resource for them
+			// We found the user, create a resource for them (self-hosted /api/users).
 			resource, resourceErr := userResource(existingUser)
 			if resourceErr != nil {
 				l.Error("Failed to create resource for existing user", zap.Error(resourceErr))
@@ -374,7 +383,7 @@ func (u *userBuilder) createAccountSelfHosted(
 		return nil, nil, nil, fmt.Errorf("grafana-connector: failed to create user: %w", err)
 	}
 
-	// Create a resource from the new user
+	// Create a resource from the new user (self-hosted CreateUser response).
 	resource, err := userResource(user)
 	if err != nil {
 		l.Error("Failed to create resource for new user", zap.Error(err))

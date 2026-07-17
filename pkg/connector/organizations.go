@@ -173,7 +173,8 @@ func (o *orgBuilder) Grants(ctx context.Context, parentResource *v2.Resource, _ 
 			continue
 		}
 
-		// Convert UserByOrg to User only when needed
+		// Convert UserByOrg to User only when needed. Only ur.Id is used for the
+		// grant; the profile is discarded here.
 		user := userByOrg.ToUser()
 		ur, err := userResource(&user)
 		if err != nil {

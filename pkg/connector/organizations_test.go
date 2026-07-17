@@ -52,11 +52,30 @@ func testGrant(userID, orgID, role string) *v2.Grant {
 	}
 }
 
+// newSelfHostedClientForTest creates a grafana.Client in self-hosted mode (basic auth,
+// empty apiToken so IsCloud() is false) pointed at ts.
+func newSelfHostedClientForTest(t *testing.T, ts *httptest.Server) *grafana.Client {
+	t.Helper()
+	client, err := grafana.NewClient(context.Background(), ts.URL, "admin", "admin", "")
+	if err != nil {
+		t.Fatalf("newSelfHostedClientForTest: %v", err)
+	}
+	return client
+}
+
 // writeJSON writes data as JSON with the given HTTP status code.
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(data)
+}
+
+// writeRaw writes a raw JSON body verbatim, for when a test must control the exact wire
+// shape — e.g. a key being absent from the object, not just present with its zero value.
+func writeRaw(w http.ResponseWriter, status int, body string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_, _ = w.Write([]byte(body))
 }
 
 // ---------------------------------------------------------------------------
@@ -275,31 +294,54 @@ func TestRevokeCloud_RemovesUser(t *testing.T) {
 	}
 }
 
-// is_externally_synced comes from the native flag or is derived from auth labels.
+// is_externally_synced surfaces Grafana's native isExternallySynced flag verbatim and
+// ONLY when Grafana returns it (User.IsExternallySynced != nil). It is never derived
+// from auth labels: an instance-managed Cloud admin with native false and
+// authLabels:["grafana.com"] reports false, and a self-hosted user
+// whose /api/users response omits the flag has the field left off the profile entirely.
+// See userResource for the full rationale.
 func TestUserResource_SurfacesExternalSyncOnProfile(t *testing.T) {
+	bp := func(b bool) *bool { return &b }
 	cases := []struct {
-		name           string
-		user           grafana.User
-		wantSynced     bool
-		wantAuthLabels string
+		name              string
+		user              grafana.User
+		wantSyncedPresent bool
+		wantSynced        bool
+		wantAuthLabels    string
 	}{
 		{
-			name:           "cloud flag set",
-			user:           grafana.User{ID: 42, Login: "alice", IsExternallySynced: true, AuthLabels: []string{"grafana.com"}},
-			wantSynced:     true,
-			wantAuthLabels: "grafana.com",
+			// Cloud, org role managed by an external IdP: native flag true → surfaced true.
+			name:              "cloud native true",
+			user:              grafana.User{ID: 42, Login: "alice", IsExternallySynced: bp(true), AuthLabels: []string{"grafana.com"}},
+			wantSyncedPresent: true,
+			wantSynced:        true,
+			wantAuthLabels:    "grafana.com",
 		},
 		{
-			name:           "self-hosted derives from auth labels",
-			user:           grafana.User{ID: 43, Login: "keycloak-user", IsExternallySynced: false, AuthLabels: []string{"Generic OAuth"}},
-			wantSynced:     true,
-			wantAuthLabels: "Generic OAuth",
+			// Core case: in Cloud every user authenticates through grafana.com SSO and
+			// carries authLabels:["grafana.com"], but an instance-managed admin's native flag
+			// is false. The field must mirror the native flag (false), NOT be OR'd to true by
+			// the auth labels (the pre-fix bug).
+			name:              "cloud native false with grafana.com auth labels reports false",
+			user:              grafana.User{ID: 45, Login: "alice.instance", IsExternallySynced: bp(false), AuthLabels: []string{"grafana.com"}},
+			wantSyncedPresent: true,
+			wantSynced:        false,
+			wantAuthLabels:    "grafana.com",
 		},
 		{
-			name:           "local user",
-			user:           grafana.User{ID: 44, Login: "bob"},
-			wantSynced:     false,
-			wantAuthLabels: "",
+			// Self-hosted: /api/users omits the native flag (nil pointer) → field absent.
+			// auth_labels is still surfaced separately (it is a different signal).
+			name:              "self-hosted flag absent, field omitted",
+			user:              grafana.User{ID: 43, Login: "keycloak-user", IsExternallySynced: nil, AuthLabels: []string{"Generic OAuth"}},
+			wantSyncedPresent: false,
+			wantAuthLabels:    "Generic OAuth",
+		},
+		{
+			// Self-hosted local user: no flag, no auth labels → neither field present.
+			name:              "self-hosted local user, both absent",
+			user:              grafana.User{ID: 44, Login: "bob", IsExternallySynced: nil},
+			wantSyncedPresent: false,
+			wantAuthLabels:    "",
 		},
 	}
 
@@ -316,8 +358,13 @@ func TestUserResource_SurfacesExternalSyncOnProfile(t *testing.T) {
 				t.Fatalf("user resource missing UserTrait (ok=%v, err=%v)", ok, err)
 			}
 			fields := ut.GetProfile().GetFields()
-			if got := fields["is_externally_synced"].GetBoolValue(); got != tc.wantSynced {
-				t.Errorf("is_externally_synced = %v, want %v", got, tc.wantSynced)
+			if _, present := fields["is_externally_synced"]; present != tc.wantSyncedPresent {
+				t.Errorf("is_externally_synced present = %v, want %v", present, tc.wantSyncedPresent)
+			}
+			if tc.wantSyncedPresent {
+				if got := fields["is_externally_synced"].GetBoolValue(); got != tc.wantSynced {
+					t.Errorf("is_externally_synced = %v, want %v", got, tc.wantSynced)
+				}
 			}
 			if got := fields["auth_labels"].GetStringValue(); got != tc.wantAuthLabels {
 				t.Errorf("auth_labels = %q, want %q", got, tc.wantAuthLabels)
