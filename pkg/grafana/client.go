@@ -3,6 +3,7 @@ package grafana
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -267,15 +268,15 @@ func (c *Client) doRequest(
 // Convert UserByOrg to User.
 func (ubo UserByOrgResponse) ToUser() User {
 	return User{
-		ID:                 ubo.ID, // Maps userId -> id
-		Name:               ubo.Name,
-		Login:              ubo.Login,
-		Email:              ubo.Email,
-		AvatarUrl:          ubo.AvatarUrl,
-		IsDisabled:         ubo.IsDisabled,
-		LastSeenAt:         ubo.LastSeenAt,
-		LastSeenAtAge:      ubo.LastSeenAtAge,
-		AuthLabels:         ubo.AuthLabels,
+		ID:            ubo.ID, // Maps userId -> id
+		Name:          ubo.Name,
+		Login:         ubo.Login,
+		Email:         ubo.Email,
+		AvatarUrl:     ubo.AvatarUrl,
+		IsDisabled:    ubo.IsDisabled,
+		LastSeenAt:    ubo.LastSeenAt,
+		LastSeenAtAge: ubo.LastSeenAtAge,
+		AuthLabels:    ubo.AuthLabels,
 		// UserByOrgResponse.IsExternallySynced is a plain bool, so this pointer is non-nil
 		// by construction, independent of the API. It carries a meaningful value only on the
 		// Cloud List path (/api/org/users, which populates the key); ToUser() is also used on
@@ -381,11 +382,23 @@ func (c *Client) GetCurrentOrg(ctx context.Context) (*Organization, error) {
 // ListCurrentOrgUsers fetches all members of the current organization.
 // No pagination — the endpoint returns the full list in one response.
 func (c *Client) ListCurrentOrgUsers(ctx context.Context) ([]UserByOrgResponse, error) {
-	var users []UserByOrgResponse
+	var raw json.RawMessage
 
-	err := c.doRequest(ctx, http.MethodGet, c.buildResourceURL(CurrentOrgUsersPath), &users, nil, nil)
+	err := c.doRequest(ctx, http.MethodGet, c.buildResourceURL(CurrentOrgUsersPath), &raw, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("grafana-client: list current org users: %w", err)
+	}
+
+	l := ctxzap.Extract(ctx)
+	preview := raw
+	if len(preview) > 2000 {
+		preview = preview[:2000]
+	}
+	l.Debug("ListCurrentOrgUsers raw response", zap.ByteString("body", preview))
+
+	var users []UserByOrgResponse
+	if err := json.Unmarshal(raw, &users); err != nil {
+		return nil, fmt.Errorf("grafana-client: list current org users: unmarshal: %w", err)
 	}
 
 	return users, nil
