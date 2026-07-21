@@ -93,6 +93,7 @@ func (g *Grafana) Validate(ctx context.Context) (annotations.Annotations, error)
 		}
 	} else {
 		// Self-hosted mode: original validation via server-admin endpoint
+		// /api/orgs is 0-based: page 0 is the first page.
 		paginationOpts := grafana.PaginationVars{
 			Size: 1,
 			Page: 0,

@@ -3,8 +3,10 @@ package connector
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -242,6 +244,94 @@ func TestListSelfHosted_OmitsExternalSyncFromRawJSON(t *testing.T) {
 		}
 		if got := fields["auth_labels"].GetStringValue(); got != wantAuthLabels[r.Id.Resource] {
 			t.Errorf("user %s: auth_labels = %q, want %q", r.Id.Resource, got, wantAuthLabels[r.Id.Resource])
+		}
+	}
+}
+
+// TestListSelfHosted_PaginationNoDoubleFetch reproduces CXH-2013: in self-hosted mode
+// the connector paginated /api/users starting at page=0 and incrementing (nextPage =
+// page+1). Grafana's list endpoints are 1-based and treat page=0 as page one, so page=0
+// and page=1 both returned the first page — the first page was fetched twice, inflating
+// the reported sync count (109 on a 59-user tenant in the ticket) even though the bundle
+// deduped by ID. The fix makes pagination 1-based: page must be requested as 1, 2, 3, …
+// each exactly once.
+func TestListSelfHosted_PaginationNoDoubleFetch(t *testing.T) {
+	const (
+		perPage    = int(ResourcesPageSize) // 50
+		totalUsers = 109                    // 50 + 50 + 9 → three pages
+	)
+
+	var requestedPages []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/users", func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page")
+		requestedPages = append(requestedPages, page)
+
+		// Grafana is 1-based; an absent page param is treated as page one.
+		pnum := 1
+		if page != "" {
+			p, err := strconv.Atoi(page)
+			if err != nil {
+				t.Errorf("server received non-numeric page %q", page)
+			}
+			pnum = p
+		}
+
+		start := (pnum - 1) * perPage
+		users := make([]grafana.User, 0, perPage)
+		for id := start + 1; id <= start+perPage && id <= totalUsers; id++ {
+			users = append(users, grafana.User{
+				ID:    id,
+				Login: fmt.Sprintf("user%d", id),
+				Email: fmt.Sprintf("user%d@localhost", id),
+			})
+		}
+		writeJSON(w, http.StatusOK, users)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	builder := newUserBuilder(newSelfHostedClientForTest(t, ts))
+
+	// Drive the pagination loop the way the SDK does: feed each returned next token back
+	// in until it is empty.
+	seen := map[string]bool{}
+	token := &pagination.Token{}
+	pages := 0
+	for {
+		pages++
+		if pages > 10 {
+			t.Fatal("pagination did not terminate within 10 pages")
+		}
+		resources, next, _, err := builder.List(context.Background(), nil, token)
+		if err != nil {
+			t.Fatalf("List returned unexpected error: %v", err)
+		}
+		for _, r := range resources {
+			if seen[r.Id.Resource] {
+				t.Errorf("user %s returned more than once (duplicate fetch)", r.Id.Resource)
+			}
+			seen[r.Id.Resource] = true
+		}
+		if next == "" {
+			break
+		}
+		token = &pagination.Token{Token: next}
+	}
+
+	if len(seen) != totalUsers {
+		t.Errorf("expected %d unique users, got %d", totalUsers, len(seen))
+	}
+
+	// The core assertion: every page requested exactly once, starting at 1. Before the fix
+	// this was ["", "1", "2", "3"] — page one fetched twice (absent + explicit page=1).
+	wantPages := []string{"1", "2", "3"}
+	if len(requestedPages) != len(wantPages) {
+		t.Fatalf("expected pages %v to each be requested exactly once, got %v", wantPages, requestedPages)
+	}
+	for i, want := range wantPages {
+		if requestedPages[i] != want {
+			t.Errorf("request %d: expected page=%q, got page=%q (full sequence %v)", i, want, requestedPages[i], requestedPages)
 		}
 	}
 }

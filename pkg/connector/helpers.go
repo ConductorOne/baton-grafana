@@ -25,8 +25,10 @@ func annotationsForUserResourceType() annotations.Annotations {
 	return annos
 }
 
-// If pagToken.Token is an empty string, the function returns 0,
-// as page 0 is considered the first page.
+// If pagToken.Token is an empty string, the function returns 0.
+// Callers decide what "page 0" means for their endpoint: /api/orgs is 0-based
+// (page 0 is the first page), while /api/users is 1-based and normalizes the
+// first page to 1 — see listSelfHosted in users.go (CXH-2013).
 func parsePageToken(pagToken *pagination.Token, resourceID *v2.ResourceId) (*pagination.Bag, uint64, error) {
 	bag := &pagination.Bag{}
 	err := bag.Unmarshal(pagToken.Token)

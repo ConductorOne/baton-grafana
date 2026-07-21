@@ -7,12 +7,14 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/pagination"
 )
 
 // newCloudClientForTest creates a grafana.Client in Cloud mode (Bearer auth) pointed at ts.
@@ -370,5 +372,119 @@ func TestUserResource_SurfacesExternalSyncOnProfile(t *testing.T) {
 				t.Errorf("auth_labels = %q, want %q", got, tc.wantAuthLabels)
 			}
 		})
+	}
+}
+
+// TestListSelfHosted_Orgs_SingleOrgSyncs reproduces the CXH-2013 CI regression.
+// /api/orgs is 0-based, so the first page must be requested with no explicit page
+// param (page 0). A fresh Grafana has exactly one org (id 1); requesting page=1
+// (as a 1-based scheme would) returns an empty second page, so the org — and its
+// org:1:Admin entitlement — never syncs, and the grant e2e fails with
+// "error fetching entitlement 'org:1:Admin': sql: no rows in result set".
+func TestListSelfHosted_Orgs_SingleOrgSyncs(t *testing.T) {
+	var requestedPages []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/orgs", func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page")
+		requestedPages = append(requestedPages, page)
+		// 0-based: page 0 (absent) → the single org; any later page → empty.
+		if page == "" || page == "0" {
+			writeJSON(w, http.StatusOK, []grafana.Organization{{ID: 1, Name: "Main Org."}})
+			return
+		}
+		writeJSON(w, http.StatusOK, []grafana.Organization{})
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	builder := newOrgBuilder(newSelfHostedClientForTest(t, ts))
+	resources, next, _, err := builder.List(context.Background(), nil, &pagination.Token{})
+	if err != nil {
+		t.Fatalf("List returned unexpected error: %v", err)
+	}
+	if len(resources) != 1 {
+		t.Fatalf("expected 1 org, got %d (regression: org sync returned nothing)", len(resources))
+	}
+	if resources[0].Id.Resource != "1" {
+		t.Errorf("expected org ID '1', got %q", resources[0].Id.Resource)
+	}
+	if next != "" {
+		t.Errorf("expected no next page for a single org, got %q", next)
+	}
+	if len(requestedPages) != 1 || (requestedPages[0] != "" && requestedPages[0] != "0") {
+		t.Errorf("first /api/orgs request must be page 0 (absent), got %v", requestedPages)
+	}
+}
+
+// TestListSelfHosted_Orgs_PaginationZeroBased pins the 0-based paging contract for
+// /api/orgs: the first page is requested with no page param (page 0), then 1, 2, …,
+// each exactly once, with no duplicate resources.
+func TestListSelfHosted_Orgs_PaginationZeroBased(t *testing.T) {
+	const (
+		perPage  = int(ResourcesPageSize) // 50
+		totalOrg = 109                    // pages 0, 1, 2 → 50 + 50 + 9
+	)
+
+	var requestedPages []string
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/orgs", func(w http.ResponseWriter, r *http.Request) {
+		page := r.URL.Query().Get("page")
+		requestedPages = append(requestedPages, page)
+
+		// 0-based; an absent page param is page 0.
+		pnum := 0
+		if page != "" {
+			p, err := strconv.Atoi(page)
+			if err != nil {
+				t.Errorf("server received non-numeric page %q", page)
+			}
+			pnum = p
+		}
+
+		start := pnum * perPage
+		orgs := make([]grafana.Organization, 0, perPage)
+		for id := start + 1; id <= start+perPage && id <= totalOrg; id++ {
+			orgs = append(orgs, grafana.Organization{ID: id, Name: fmt.Sprintf("org%d", id)})
+		}
+		writeJSON(w, http.StatusOK, orgs)
+	})
+	ts := httptest.NewServer(mux)
+	defer ts.Close()
+
+	builder := newOrgBuilder(newSelfHostedClientForTest(t, ts))
+	seen := map[string]bool{}
+	token := &pagination.Token{}
+	for i := 0; ; i++ {
+		if i > 10 {
+			t.Fatal("pagination did not terminate within 10 pages")
+		}
+		resources, next, _, err := builder.List(context.Background(), nil, token)
+		if err != nil {
+			t.Fatalf("List returned unexpected error: %v", err)
+		}
+		for _, r := range resources {
+			if seen[r.Id.Resource] {
+				t.Errorf("org %s returned more than once (duplicate fetch)", r.Id.Resource)
+			}
+			seen[r.Id.Resource] = true
+		}
+		if next == "" {
+			break
+		}
+		token = &pagination.Token{Token: next}
+	}
+
+	if len(seen) != totalOrg {
+		t.Errorf("expected %d unique orgs, got %d", totalOrg, len(seen))
+	}
+	// 0-based: first request omits the page param (page 0), then page=1, page=2.
+	wantPages := []string{"", "1", "2"}
+	if len(requestedPages) != len(wantPages) {
+		t.Fatalf("expected pages %v to each be requested once, got %v", wantPages, requestedPages)
+	}
+	for i, want := range wantPages {
+		if requestedPages[i] != want {
+			t.Errorf("request %d: expected page=%q, got page=%q (full sequence %v)", i, want, requestedPages[i], requestedPages)
+		}
 	}
 }

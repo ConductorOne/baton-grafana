@@ -140,6 +140,15 @@ func (u *userBuilder) listSelfHosted(ctx context.Context, pToken *pagination.Tok
 		return nil, "", nil, fmt.Errorf("failed to parse page token: %w", err)
 	}
 
+	// Grafana's /api/users endpoint is 1-based: it treats page=0 and page=1 as the
+	// same first page. Starting at page 0 and deriving nextPage as page+1 therefore
+	// fetched the first page twice (page=0, then page=1). Normalize the first page to
+	// 1 so pagination walks 1, 2, 3, … with each page fetched once (CXH-2013).
+	// (This is specific to /api/users; /api/orgs is 0-based — see organizations.go.)
+	if page == 0 {
+		page = 1
+	}
+
 	paginationOpts := grafana.PaginationVars{
 		Size: ResourcesPageSize,
 		Page: page,
