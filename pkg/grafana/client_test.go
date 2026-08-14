@@ -163,3 +163,68 @@ func TestRemoveRoleFromTeamNotFoundDiscrimination(t *testing.T) {
 		t.Fatal("team-not-found must not map to ErrRBACUnavailable")
 	}
 }
+
+func TestListServiceAccountsAcceptsObjectAndArray(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body any
+		want int
+	}{
+		{
+			name: "paginated object",
+			body: map[string]any{
+				"totalCount": 1,
+				"page":       1,
+				"perPage":    100,
+				"serviceAccounts": []map[string]any{
+					{"id": 9, "name": "sa-ci", "login": "sa-9", "role": "Viewer"},
+				},
+			},
+			want: 1,
+		},
+		{
+			name: "bare array",
+			body: []any{},
+			want: 0,
+		},
+		{
+			name: "bare array with items",
+			body: []map[string]any{
+				{"id": 3, "name": "sa-mock", "login": "sa-3", "role": "Editor"},
+			},
+			want: 1,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/serviceaccounts/search" {
+					t.Errorf("path=%s", r.URL.Path)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(tc.body)
+			}))
+			t.Cleanup(ts.Close)
+
+			client, err := NewClient(context.Background(), ts.URL, "", "", "token")
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+
+			accounts, next, err := client.ListServiceAccounts(context.Background(), &PaginationVars{Page: 1, Size: 100})
+			if err != nil {
+				t.Fatalf("ListServiceAccounts: %v", err)
+			}
+			if len(accounts) != tc.want {
+				t.Fatalf("got %d accounts, want %d", len(accounts), tc.want)
+			}
+			if next != 0 {
+				t.Fatalf("nextPage=%d, want 0", next)
+			}
+		})
+	}
+}

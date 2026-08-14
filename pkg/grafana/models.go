@@ -1,6 +1,9 @@
 package grafana
 
 import (
+	"bytes"
+	"encoding/json"
+	"fmt"
 	"net/url"
 
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
@@ -167,11 +170,37 @@ type ServiceAccount struct {
 }
 
 // ServiceAccountSearchResponse is the paginated payload from GET /api/serviceaccounts/search.
+// Live Grafana returns an object with a serviceAccounts array. Some mocks (and
+// older servers) return a bare JSON array; UnmarshalJSON accepts both.
 type ServiceAccountSearchResponse struct {
 	TotalCount      int              `json:"totalCount"`
 	ServiceAccounts []ServiceAccount `json:"serviceAccounts"`
 	Page            int              `json:"page"`
 	PerPage         int              `json:"perPage"`
+}
+
+func (r *ServiceAccountSearchResponse) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		return fmt.Errorf("empty service account search response")
+	}
+	if trimmed[0] == '[' {
+		var accounts []ServiceAccount
+		if err := json.Unmarshal(trimmed, &accounts); err != nil {
+			return err
+		}
+		r.ServiceAccounts = accounts
+		r.TotalCount = len(accounts)
+		return nil
+	}
+
+	type alias ServiceAccountSearchResponse
+	var wrapped alias
+	if err := json.Unmarshal(trimmed, &wrapped); err != nil {
+		return err
+	}
+	*r = ServiceAccountSearchResponse(wrapped)
+	return nil
 }
 
 // Role is a Grafana RBAC role from GET /api/access-control/roles.
