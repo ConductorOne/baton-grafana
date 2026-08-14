@@ -94,6 +94,8 @@ To create a service account token:
 3. Open the new service account and click **Add service account token**.
 4. Copy and save the generated token — it will not be shown again.
 
+The connector always syncs teams and service accounts (in addition to orgs and users). Opting in to the RBAC **role** resource type also requires access-control read/write for IRM/OnCall role assignments. Use an **Admin** service-account role (or equivalent permissions covering `teams:read`, `serviceaccounts:read`, and when opted in `roles:read` / team role assignment). A narrower token that previously synced only users/orgs may fail List after this upgrade.
+
 You will need:
 
 * Your Grafana Cloud instance URL (e.g., `https://your-org.grafana.net`)

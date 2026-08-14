@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"sync/atomic"
 
 	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -16,8 +17,13 @@ import (
 
 // Grafana represents the Baton connector for Grafana.
 type Grafana struct {
-	client    *grafana.Client
-	syncRoles bool
+	client *grafana.Client
+	// rolesListed is set when roleBuilder.List successfully runs in this sync.
+	// teamBuilder consults it before emitting team→role grants so OptIn-off
+	// tenants (where role List is never scheduled) cannot mint dangling role
+	// entitlement references. WillSyncResourceType is not enough: C1 passes the
+	// opted-in set per task, while ConnectorOpts only sees the local CLI flag.
+	rolesListed atomic.Bool
 }
 
 // ResourceSyncers returns a list of syncers for different resource types.
@@ -25,10 +31,18 @@ func (g *Grafana) ResourceSyncers(ctx context.Context) []connectorbuilder.Resour
 	return []connectorbuilder.ResourceSyncer{
 		newOrgBuilder(g.client),
 		newUserBuilder(g.client),
-		newTeamBuilder(g.client, g.syncRoles),
-		newRoleBuilder(g.client),
+		newTeamBuilder(g.client, g.rolesWereListed),
+		newRoleBuilder(g.client, g.markRolesListed),
 		newServiceAccountBuilder(g.client),
 	}
+}
+
+func (g *Grafana) markRolesListed() {
+	g.rolesListed.Store(true)
+}
+
+func (g *Grafana) rolesWereListed() bool {
+	return g.rolesListed.Load()
 }
 
 // Asset is used to fetch an asset based on an AssetRef.
@@ -116,8 +130,9 @@ func (g *Grafana) Validate(ctx context.Context) (annotations.Annotations, error)
 // New initializes a new instance of the Grafana connector.
 // When apiToken is non-empty the connector operates in Cloud mode (Bearer auth, current-org scope).
 // When apiToken is empty the connector operates in self-hosted mode (Basic auth, server-admin scope).
-// A nil opts means capabilities introspection — default to syncing every advertised type.
-func New(ctx context.Context, hostname, username, password, apiToken string, opts *cli.ConnectorOpts) (*Grafana, error) {
+// opts is accepted for the DefineConfigurationV2 / RunConnector wiring; role sync gating uses
+// rolesListed (set by roleBuilder.List) instead of WillSyncResourceType.
+func New(ctx context.Context, hostname, username, password, apiToken string, _ *cli.ConnectorOpts) (*Grafana, error) {
 	grafanaClient, err := grafana.NewClient(ctx, hostname, username, password, apiToken)
 	if err != nil {
 		l := ctxzap.Extract(ctx)
@@ -125,10 +140,7 @@ func New(ctx context.Context, hostname, username, password, apiToken string, opt
 		return nil, err
 	}
 
-	syncRoles := opts == nil || opts.WillSyncResourceType(resourceTypeRoleID)
-
 	return &Grafana{
-		client:    grafanaClient,
-		syncRoles: syncRoles,
+		client: grafanaClient,
 	}, nil
 }

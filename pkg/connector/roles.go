@@ -18,11 +18,12 @@ import (
 )
 
 type roleBuilder struct {
-	client *grafana.Client
+	client          *grafana.Client
+	markRolesListed func()
 }
 
-func newRoleBuilder(client *grafana.Client) *roleBuilder {
-	return &roleBuilder{client: client}
+func newRoleBuilder(client *grafana.Client, markRolesListed func()) *roleBuilder {
+	return &roleBuilder{client: client, markRolesListed: markRolesListed}
 }
 
 func (r *roleBuilder) ResourceType(_ context.Context) *v2.ResourceType {
@@ -79,6 +80,10 @@ func (r *roleBuilder) List(ctx context.Context, _ *v2.ResourceId, _ *pagination.
 		resources = append(resources, resource)
 	}
 
+	if r.markRolesListed != nil {
+		r.markRolesListed()
+	}
+
 	return resources, "", nil, nil
 }
 
@@ -120,7 +125,7 @@ func (r *roleBuilder) Grant(ctx context.Context, principal *v2.Resource, entitle
 
 	teamID, err := strconv.Atoi(principal.Id.Resource)
 	if err != nil {
-		return nil, fmt.Errorf("grafana-connector: invalid team id %q: %w", principal.Id.Resource, err)
+		return nil, status.Errorf(codes.InvalidArgument, "grafana-connector: invalid team id %q: %v", principal.Id.Resource, err)
 	}
 
 	roleName := entitlement.Resource.Id.Resource
@@ -169,7 +174,7 @@ func (r *roleBuilder) Revoke(ctx context.Context, g *v2.Grant) (annotations.Anno
 
 	teamID, err := strconv.Atoi(principal.Id.Resource)
 	if err != nil {
-		return nil, fmt.Errorf("grafana-connector: invalid team id %q: %w", principal.Id.Resource, err)
+		return nil, status.Errorf(codes.InvalidArgument, "grafana-connector: invalid team id %q: %v", principal.Id.Resource, err)
 	}
 
 	roleName := g.Entitlement.Resource.Id.Resource

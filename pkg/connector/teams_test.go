@@ -49,7 +49,7 @@ func TestTeamListAndMemberGrants(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	builder := newTeamBuilder(newCloudClientForTest(t, ts), true)
+	builder := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return true })
 
 	resources, next, _, err := builder.List(context.Background(), nil, &pagination.Token{})
 	if err != nil {
@@ -113,7 +113,7 @@ func TestTeamAndServiceAccountPagination(t *testing.T) {
 			name: "teams",
 			path: "/api/teams/search",
 			run: func(t *testing.T, ts *httptest.Server) {
-				builder := newTeamBuilder(newCloudClientForTest(t, ts), true)
+				builder := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return true })
 				token := &pagination.Token{}
 				var ids []string
 				for {
@@ -239,7 +239,7 @@ func TestTeamGrantIdempotent(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	annos, err := newTeamBuilder(newCloudClientForTest(t, ts), true).Grant(
+	annos, err := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return true }).Grant(
 		context.Background(),
 		&v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeUser.Id, Resource: "14"}},
 		&v2.Entitlement{
@@ -274,7 +274,7 @@ func TestTeamGrantAndRevokeSuccess(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	builder := newTeamBuilder(newCloudClientForTest(t, ts), true)
+	builder := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return true })
 	principal := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeUser.Id, Resource: "14"}}
 	entitlement := &v2.Entitlement{
 		Resource: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
@@ -303,7 +303,7 @@ func TestTeamRevokeIdempotent(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	annos, err := newTeamBuilder(newCloudClientForTest(t, ts), true).Revoke(context.Background(), &v2.Grant{
+	annos, err := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return true }).Revoke(context.Background(), &v2.Grant{
 		Principal: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeUser.Id, Resource: "14"}},
 		Entitlement: &v2.Entitlement{
 			Resource: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
@@ -327,7 +327,7 @@ func TestTeamRevokeDoesNotHideMissingTeam(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	annos, err := newTeamBuilder(newCloudClientForTest(t, ts), true).Revoke(context.Background(), &v2.Grant{
+	annos, err := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return true }).Revoke(context.Background(), &v2.Grant{
 		Principal: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeUser.Id, Resource: "14"}},
 		Entitlement: &v2.Entitlement{
 			Resource: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
@@ -357,7 +357,7 @@ func TestRoleListFiltersIRM(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	resources, _, _, err := newRoleBuilder(newCloudClientForTest(t, ts)).List(context.Background(), nil, &pagination.Token{})
+	resources, _, _, err := newRoleBuilder(newCloudClientForTest(t, ts), nil).List(context.Background(), nil, &pagination.Token{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -380,7 +380,7 @@ func TestRoleListFiltersIRM(t *testing.T) {
 }
 
 func TestRoleStaticEntitlements(t *testing.T) {
-	builder := newRoleBuilder(nil)
+	builder := newRoleBuilder(nil, nil)
 
 	dynamic, _, _, err := builder.Entitlements(context.Background(), &v2.Resource{}, &pagination.Token{})
 	if err != nil {
@@ -420,7 +420,7 @@ func TestRoleStaticEntitlements(t *testing.T) {
 }
 
 func TestTeamStaticEntitlements(t *testing.T) {
-	builder := newTeamBuilder(nil, true)
+	builder := newTeamBuilder(nil, func() bool { return true })
 
 	dynamic, _, _, err := builder.Entitlements(context.Background(), &v2.Resource{}, &pagination.Token{})
 	if err != nil {
@@ -482,7 +482,7 @@ func TestRoleGrantAlreadyExistsViaPreread(t *testing.T) {
 		t.Fatalf("structpb: %v", err)
 	}
 
-	annos, err := newRoleBuilder(newCloudClientForTest(t, ts)).Grant(
+	annos, err := newRoleBuilder(newCloudClientForTest(t, ts), nil).Grant(
 		context.Background(),
 		&v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
 		&v2.Entitlement{
@@ -537,7 +537,7 @@ func TestRoleGrantUsesCurrentUID(t *testing.T) {
 		t.Fatalf("structpb: %v", err)
 	}
 
-	_, err = newRoleBuilder(newCloudClientForTest(t, ts)).Grant(
+	_, err = newRoleBuilder(newCloudClientForTest(t, ts), nil).Grant(
 		context.Background(),
 		&v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
 		&v2.Entitlement{Resource: &v2.Resource{
@@ -554,7 +554,7 @@ func TestRoleGrantUsesCurrentUID(t *testing.T) {
 }
 
 func TestRoleGrantRejectsOutOfCatalogRole(t *testing.T) {
-	_, err := newRoleBuilder(nil).Grant(
+	_, err := newRoleBuilder(nil, nil).Grant(
 		context.Background(),
 		&v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
 		&v2.Entitlement{Resource: &v2.Resource{
@@ -585,7 +585,7 @@ func TestRoleGrantRejectsHiddenRole(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	_, err := newRoleBuilder(newCloudClientForTest(t, ts)).Grant(
+	_, err := newRoleBuilder(newCloudClientForTest(t, ts), nil).Grant(
 		context.Background(),
 		&v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
 		&v2.Entitlement{Resource: &v2.Resource{
@@ -697,7 +697,7 @@ func TestRoleRevokeIdempotent(t *testing.T) {
 		t.Fatalf("structpb: %v", err)
 	}
 
-	annos, err := newRoleBuilder(newCloudClientForTest(t, ts)).Revoke(context.Background(), &v2.Grant{
+	annos, err := newRoleBuilder(newCloudClientForTest(t, ts), nil).Revoke(context.Background(), &v2.Grant{
 		Principal: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
 		Entitlement: &v2.Entitlement{
 			Resource: &v2.Resource{
@@ -738,7 +738,7 @@ func TestRoleRevokeUsesCurrentUID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("structpb: %v", err)
 	}
-	_, err = newRoleBuilder(newCloudClientForTest(t, ts)).Revoke(context.Background(), &v2.Grant{
+	_, err = newRoleBuilder(newCloudClientForTest(t, ts), nil).Revoke(context.Background(), &v2.Grant{
 		Principal: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
 		Entitlement: &v2.Entitlement{Resource: &v2.Resource{
 			Id:      &v2.ResourceId{ResourceType: resourceTypeRole.Id, Resource: "plugins:grafana-irm-app:schedules-editor"},
@@ -778,7 +778,7 @@ func TestRoleListErrorsWhenRBACUnavailable(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	_, _, _, err := newRoleBuilder(newCloudClientForTest(t, ts)).List(context.Background(), nil, &pagination.Token{})
+	_, _, _, err := newRoleBuilder(newCloudClientForTest(t, ts), nil).List(context.Background(), nil, &pagination.Token{})
 	if err == nil {
 		t.Fatal("expected List to error when access-control is unavailable")
 	}
@@ -790,7 +790,7 @@ func TestRoleListErrorsWhenRBACForbidden(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	_, _, _, err := newRoleBuilder(newCloudClientForTest(t, ts)).List(context.Background(), nil, &pagination.Token{})
+	_, _, _, err := newRoleBuilder(newCloudClientForTest(t, ts), nil).List(context.Background(), nil, &pagination.Token{})
 	if err == nil {
 		t.Fatal("expected List to error when access-control is forbidden")
 	}
@@ -841,7 +841,7 @@ func TestTeamRoleGrantsSkipsHiddenRoles(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	builder := newTeamBuilder(newCloudClientForTest(t, ts), true)
+	builder := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return true })
 	resources, _, _, err := builder.List(context.Background(), nil, &pagination.Token{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -887,7 +887,7 @@ func TestTeamRoleGrantsSkipsHiddenRoles(t *testing.T) {
 	}
 }
 
-func TestTeamListSkipsRoleSearchWhenRolesNotSynced(t *testing.T) {
+func TestTeamGrantsSkipRoleEmissionWhenRolesNotListed(t *testing.T) {
 	var teamRoleSearchCalls int
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -899,14 +899,19 @@ func TestTeamListSkipsRoleSearchWhenRolesNotSynced(t *testing.T) {
 			writeJSON(w, http.StatusOK, []map[string]any{})
 		case "/api/access-control/teams/roles/search":
 			teamRoleSearchCalls++
-			writeJSON(w, http.StatusOK, map[string]any{})
+			writeJSON(w, http.StatusOK, map[string]any{
+				"7": []map[string]any{
+					{"uid": "r1", "name": "plugins:grafana-irm-app:admin", "displayName": "Admin", "group": "IRM"},
+				},
+			})
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	defer ts.Close()
 
-	builder := newTeamBuilder(newCloudClientForTest(t, ts), false)
+	// rolesWereListed=false simulates OptIn-off: roleBuilder.List never ran.
+	builder := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return false })
 	resources, _, _, err := builder.List(context.Background(), nil, &pagination.Token{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -914,11 +919,8 @@ func TestTeamListSkipsRoleSearchWhenRolesNotSynced(t *testing.T) {
 	if len(resources) != 1 {
 		t.Fatalf("resources=%d", len(resources))
 	}
-	if teamRoleSearchCalls != 0 {
-		t.Fatalf("expected no team-roles search when syncRoles=false, got %d", teamRoleSearchCalls)
-	}
-	if _, ok := rs.GetProfileStringValue(resources[0].GetProfile(), profileKeyAssignedRoleNames); ok {
-		t.Fatal("assigned_role_names must be omitted when roles are not in sync")
+	if teamRoleSearchCalls != 1 {
+		t.Fatalf("List still batches team-role search; got %d calls", teamRoleSearchCalls)
 	}
 
 	grants, _, _, err := builder.Grants(context.Background(), resources[0], &pagination.Token{})
@@ -927,7 +929,7 @@ func TestTeamListSkipsRoleSearchWhenRolesNotSynced(t *testing.T) {
 	}
 	for _, g := range grants {
 		if g.GetEntitlement().GetResource().GetId().GetResourceType() == resourceTypeRoleID {
-			t.Fatalf("unexpected role grant when syncRoles=false: %+v", g)
+			t.Fatalf("unexpected role grant when roles were not listed: %+v", g)
 		}
 	}
 }
@@ -952,7 +954,7 @@ func TestTeamRoleGrantsSoftSkipOnOSSPreservingMembers(t *testing.T) {
 	defer ts.Close()
 
 	resource := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}}
-	grants, _, _, err := newTeamBuilder(newCloudClientForTest(t, ts), true).Grants(context.Background(), resource, &pagination.Token{})
+	grants, _, _, err := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return true }).Grants(context.Background(), resource, &pagination.Token{})
 	if err != nil {
 		t.Fatalf("Grants: %v", err)
 	}
@@ -983,7 +985,7 @@ func TestTeamRoleGrantsPropagatesSearchServerError(t *testing.T) {
 	defer ts.Close()
 
 	resource := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}}
-	_, _, _, err := newTeamBuilder(newCloudClientForTest(t, ts), true).Grants(context.Background(), resource, &pagination.Token{})
+	_, _, _, err := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return true }).Grants(context.Background(), resource, &pagination.Token{})
 	if err == nil {
 		t.Fatal("expected role-search 500 to fail Grants")
 	}
@@ -1005,7 +1007,7 @@ func TestTeamRoleGrantsPropagatesSearchForbidden(t *testing.T) {
 	defer ts.Close()
 
 	resource := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}}
-	_, _, _, err := newTeamBuilder(newCloudClientForTest(t, ts), true).Grants(context.Background(), resource, &pagination.Token{})
+	_, _, _, err := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return true }).Grants(context.Background(), resource, &pagination.Token{})
 	if err == nil {
 		t.Fatal("expected role-search 403 to fail Grants (avoid wiping role grants)")
 	}
@@ -1026,7 +1028,7 @@ func TestRoleRevokeOSSUnavailable(t *testing.T) {
 		t.Fatalf("structpb: %v", err)
 	}
 
-	_, err = newRoleBuilder(newCloudClientForTest(t, ts)).Revoke(context.Background(), &v2.Grant{
+	_, err = newRoleBuilder(newCloudClientForTest(t, ts), nil).Revoke(context.Background(), &v2.Grant{
 		Principal: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
 		Entitlement: &v2.Entitlement{
 			Resource: &v2.Resource{

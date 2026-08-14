@@ -12,6 +12,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 )
 
 type serviceAccountBuilder struct {
@@ -115,19 +117,32 @@ func (s *serviceAccountBuilder) Entitlements(_ context.Context, _ *v2.Resource, 
 // Grants emits the service account's org role from the search response `role`
 // field (Viewer/Editor/Admin). GET /api/org/users does not include service
 // accounts, so org-side Grants alone miss that access.
-func (s *serviceAccountBuilder) Grants(_ context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
+func (s *serviceAccountBuilder) Grants(ctx context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
 	rawProfile := resource.GetProfile()
 	if rawProfile == nil {
+		ctxzap.Extract(ctx).Debug(
+			"grafana-connector: service account missing profile; skipping org role grant",
+			zap.String("resource_id", resource.GetId().GetResource()),
+		)
 		return nil, "", nil, nil
 	}
 
 	role, ok := rs.GetProfileStringValue(rawProfile, profileKeyRole)
 	if !ok || !slices.Contains(userRoles, role) {
+		ctxzap.Extract(ctx).Debug(
+			"grafana-connector: service account has no grantable org role; skipping",
+			zap.String("resource_id", resource.GetId().GetResource()),
+			zap.String("role", role),
+		)
 		return nil, "", nil, nil
 	}
 
 	orgID, ok := rs.GetProfileStringValue(rawProfile, profileKeyOrgID)
 	if !ok || orgID == "" {
+		ctxzap.Extract(ctx).Debug(
+			"grafana-connector: service account missing org_id; skipping org role grant",
+			zap.String("resource_id", resource.GetId().GetResource()),
+		)
 		return nil, "", nil, nil
 	}
 
