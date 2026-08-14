@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
-	"strings"
 
 	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
@@ -14,35 +13,29 @@ import (
 	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
-	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
-	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
 
 type teamBuilder struct {
-	client          *grafana.Client
-	rolesWereListed func() bool
+	client *grafana.Client
 }
 
-func newTeamBuilder(client *grafana.Client, rolesWereListed func() bool) *teamBuilder {
-	return &teamBuilder{client: client, rolesWereListed: rolesWereListed}
+func newTeamBuilder(client *grafana.Client) *teamBuilder {
+	return &teamBuilder{client: client}
 }
 
 func (t *teamBuilder) ResourceType(_ context.Context) *v2.ResourceType {
 	return resourceTypeTeam
 }
 
-func teamResource(team grafana.Team, assignedRoleNames *string) (*v2.Resource, error) {
+func teamResource(team grafana.Team) (*v2.Resource, error) {
 	profile := map[string]any{
 		profileKeyTeamID:      team.ID,
 		profileKeyUID:         team.UID,
 		profileKeyOrgID:       team.OrgID,
 		profileFieldEmail:     team.Email,
 		profileKeyMemberCount: team.MemberCount,
-	}
-	if assignedRoleNames != nil {
-		profile[profileKeyAssignedRoleNames] = *assignedRoleNames
 	}
 
 	return rs.NewGroupResource(
@@ -84,32 +77,9 @@ func (t *teamBuilder) List(ctx context.Context, _ *v2.ResourceId, pToken *pagina
 		return nil, "", nil, fmt.Errorf("grafana-connector: failed to generate next page token: %w", err)
 	}
 
-	// One POST /api/access-control/teams/roles/search per List page (batch teamIds).
-	// Carry filtered role names on each team profile so Grants does not re-search.
-	// Grants still gates emission on rolesWereListed so OptIn-off syncs cannot
-	// mint dangling role grants even though this search may still run.
-	teamIDs := make([]int, 0, len(teams))
-	for _, team := range teams {
-		teamIDs = append(teamIDs, team.ID)
-	}
-
-	var rolesByTeam map[string][]grafana.Role
-	rolesByTeam, err = t.client.ListRolesForTeams(ctx, teamIDs)
-	switch {
-	case err == nil:
-	case errors.Is(err, grafana.ErrRBACUnavailable):
-		ctxzap.Extract(ctx).Debug(
-			"grafana-connector: access-control unavailable; team List continuing without role assignments",
-		)
-		rolesByTeam = map[string][]grafana.Role{}
-	default:
-		return nil, "", nil, fmt.Errorf("grafana-connector: failed to list roles for teams: %w", err)
-	}
-
 	resources := make([]*v2.Resource, 0, len(teams))
 	for _, team := range teams {
-		joined := strings.Join(emitableRoleNames(rolesByTeam[strconv.Itoa(team.ID)]), ",")
-		resource, err := teamResource(team, &joined)
+		resource, err := teamResource(team)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("grafana-connector: failed to create team resource %q: %w", team.Name, err)
 		}
@@ -117,16 +87,6 @@ func (t *teamBuilder) List(ctx context.Context, _ *v2.ResourceId, pToken *pagina
 	}
 
 	return resources, next, nil, nil
-}
-
-func emitableRoleNames(roles []grafana.Role) []string {
-	out := make([]string, 0, len(roles))
-	for _, role := range roles {
-		if shouldEmitRole(role) {
-			out = append(out, role.Name)
-		}
-	}
-	return out
 }
 
 // Entitlements is a no-op — every team shares the same membership entitlement
@@ -149,6 +109,10 @@ func (t *teamBuilder) StaticEntitlements(_ context.Context, _ *pagination.Token)
 	}, "", nil, nil
 }
 
+// Grants emits team membership only. Team→RBAC-role assignments are emitted by
+// roleBuilder.GrantsForResourceType (TypeScopedGrants) so they are tied to the
+// role type's own sync lifecycle and never reference unsynced role entitlements
+// when the OptIn-required role type is off.
 func (t *teamBuilder) Grants(ctx context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
 	teamID, err := strconv.Atoi(resource.Id.Resource)
 	if err != nil {
@@ -169,87 +133,7 @@ func (t *teamBuilder) Grants(ctx context.Context, resource *v2.Resource, _ *pagi
 		grants = append(grants, grant.NewGrant(resource, teamMemberEntitlement, principalID))
 	}
 
-	// Team→RBAC role grants. Prefer profile-carried names from List (one search
-	// per page). Fallback searches a single team when the key is absent (e.g.
-	// tests that call Grants without List). Grant/Revoke keep the per-team GET
-	// for live pre-reads.
-	//
-	// Membership is the primary grant path; listing team roles is secondary. Teams
-	// sync on every Grafana edition, so an absent access-control API only skips
-	// role grants and keeps the member grants already built. Every other failure
-	// (permissions, 5xx) fails closed instead of emitting an empty role set.
-	// When the role type was not listed in this sync (OptInRequired and not
-	// enabled), skip team→role grants so we do not reference missing role
-	// entitlements. roleBuilder.List sets rolesWereListed on success.
-	if t.rolesWereListed == nil || !t.rolesWereListed() {
-		return grants, "", nil, nil
-	}
-
-	roleGrants, err := t.teamRoleGrants(ctx, resource, teamID)
-	if err != nil {
-		if errors.Is(err, grafana.ErrRBACUnavailable) {
-			ctxzap.Extract(ctx).Debug(
-				"grafana-connector: access-control unavailable; skipping team role grants",
-				zap.Int("team_id", teamID),
-			)
-			return grants, "", nil, nil
-		}
-		return nil, "", nil, err
-	}
-	grants = append(grants, roleGrants...)
-
 	return grants, "", nil, nil
-}
-
-func (t *teamBuilder) teamRoleGrants(ctx context.Context, teamResource *v2.Resource, teamID int) ([]*v2.Grant, error) {
-	if names, ok := assignedRoleNamesFromProfile(teamResource); ok {
-		return teamRoleGrantsFromNames(teamResource, names)
-	}
-
-	rolesByTeam, err := t.client.ListRolesForTeams(ctx, []int{teamID})
-	if err != nil {
-		return nil, fmt.Errorf("grafana-connector: failed to list roles for team %d: %w", teamID, err)
-	}
-	return teamRoleGrantsFromNames(teamResource, emitableRoleNames(rolesByTeam[strconv.Itoa(teamID)]))
-}
-
-func assignedRoleNamesFromProfile(resource *v2.Resource) ([]string, bool) {
-	raw := resource.GetProfile()
-	if raw == nil {
-		return nil, false
-	}
-	joined, ok := rs.GetProfileStringValue(raw, profileKeyAssignedRoleNames)
-	if !ok {
-		return nil, false
-	}
-	if joined == "" {
-		return nil, true
-	}
-	return strings.Split(joined, ","), true
-}
-
-func teamRoleGrantsFromNames(teamResource *v2.Resource, roleNames []string) ([]*v2.Grant, error) {
-	memberEntitlementID := ent.NewEntitlementID(teamResource, teamMemberEntitlement)
-	out := make([]*v2.Grant, 0, len(roleNames))
-	for _, name := range roleNames {
-		if name == "" || !isIRMOrOnCallRole(name) {
-			continue
-		}
-		roleID, err := rs.NewResourceID(resourceTypeRole, name)
-		if err != nil {
-			return nil, fmt.Errorf("grafana-connector: failed to build role resource id %q: %w", name, err)
-		}
-		out = append(out, grant.NewGrant(
-			&v2.Resource{Id: roleID},
-			roleAssignedEntitlement,
-			teamResource.Id,
-			grant.WithAnnotation(&v2.GrantExpandable{
-				EntitlementIds: []string{memberEntitlementID},
-				Shallow:        true,
-			}),
-		))
-	}
-	return out, nil
 }
 
 func (t *teamBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) (annotations.Annotations, error) {

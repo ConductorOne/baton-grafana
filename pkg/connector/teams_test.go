@@ -12,11 +12,13 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
+	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestTeamListAndMemberGrants(t *testing.T) {
+	var roleSearchCalls int
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/teams/search":
@@ -33,23 +35,15 @@ func TestTeamListAndMemberGrants(t *testing.T) {
 				{"orgId": 1, "teamId": 7, "userId": 14, "email": "a@ex.com", "login": "alice", "name": "Alice", "permission": 0},
 			})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/access-control/teams/roles/search":
-			writeJSON(w, http.StatusOK, map[string]any{
-				"7": []map[string]any{
-					{
-						"uid":         "plugins_SiUG0TOiRZRHgqgsYnJ0L9SySMQ",
-						"name":        "plugins:grafana-irm-app:schedules-editor",
-						"displayName": "Schedules Editor",
-						"group":       "IRM",
-					},
-				},
-			})
+			roleSearchCalls++
+			http.NotFound(w, r)
 		default:
 			http.NotFound(w, r)
 		}
 	}))
 	defer ts.Close()
 
-	builder := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return true })
+	builder := newTeamBuilder(newCloudClientForTest(t, ts))
 
 	resources, next, _, err := builder.List(context.Background(), nil, &pagination.Token{})
 	if err != nil {
@@ -66,36 +60,16 @@ func TestTeamListAndMemberGrants(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Grants: %v", err)
 	}
-	if len(grants) != 2 {
-		t.Fatalf("expected member + role grant, got %d", len(grants))
+	// Team Grants emits membership only; team→role assignments come from
+	// roleBuilder.GrantsForResourceType, so the team path never calls RBAC.
+	if len(grants) != 1 {
+		t.Fatalf("expected only the member grant, got %d", len(grants))
 	}
-
-	var sawMember, sawRole bool
-	for _, g := range grants {
-		switch g.Entitlement.Resource.Id.ResourceType {
-		case resourceTypeTeam.Id:
-			sawMember = true
-			if g.Principal.Id.Resource != "14" {
-				t.Fatalf("member principal = %s", g.Principal.Id.Resource)
-			}
-		case resourceTypeRole.Id:
-			sawRole = true
-			if g.Entitlement.Resource.Id.Resource != "plugins:grafana-irm-app:schedules-editor" {
-				t.Fatalf("role id = %s", g.Entitlement.Resource.Id.Resource)
-			}
-			annos := annotations.Annotations(g.Annotations)
-			var expandable v2.GrantExpandable
-			ok, err := annos.Pick(&expandable)
-			if err != nil || !ok {
-				t.Fatal("expected GrantExpandable annotation on team→role grant")
-			}
-			if !expandable.Shallow {
-				t.Fatal("expected GrantExpandable.Shallow=true")
-			}
-		}
+	if grants[0].Entitlement.Resource.Id.ResourceType != resourceTypeTeam.Id || grants[0].Principal.Id.Resource != "14" {
+		t.Fatalf("unexpected member grant: %+v", grants[0])
 	}
-	if !sawMember || !sawRole {
-		t.Fatalf("missing grants: member=%v role=%v", sawMember, sawRole)
+	if roleSearchCalls != 0 {
+		t.Fatalf("team List/Grants must not call the RBAC search, got %d calls", roleSearchCalls)
 	}
 }
 
@@ -113,7 +87,7 @@ func TestTeamAndServiceAccountPagination(t *testing.T) {
 			name: "teams",
 			path: "/api/teams/search",
 			run: func(t *testing.T, ts *httptest.Server) {
-				builder := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return true })
+				builder := newTeamBuilder(newCloudClientForTest(t, ts))
 				token := &pagination.Token{}
 				var ids []string
 				for {
@@ -239,7 +213,7 @@ func TestTeamGrantIdempotent(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	annos, err := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return true }).Grant(
+	annos, err := newTeamBuilder(newCloudClientForTest(t, ts)).Grant(
 		context.Background(),
 		&v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeUser.Id, Resource: "14"}},
 		&v2.Entitlement{
@@ -274,7 +248,7 @@ func TestTeamGrantAndRevokeSuccess(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	builder := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return true })
+	builder := newTeamBuilder(newCloudClientForTest(t, ts))
 	principal := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeUser.Id, Resource: "14"}}
 	entitlement := &v2.Entitlement{
 		Resource: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
@@ -303,7 +277,7 @@ func TestTeamRevokeIdempotent(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	annos, err := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return true }).Revoke(context.Background(), &v2.Grant{
+	annos, err := newTeamBuilder(newCloudClientForTest(t, ts)).Revoke(context.Background(), &v2.Grant{
 		Principal: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeUser.Id, Resource: "14"}},
 		Entitlement: &v2.Entitlement{
 			Resource: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
@@ -327,7 +301,7 @@ func TestTeamRevokeDoesNotHideMissingTeam(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	annos, err := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return true }).Revoke(context.Background(), &v2.Grant{
+	annos, err := newTeamBuilder(newCloudClientForTest(t, ts)).Revoke(context.Background(), &v2.Grant{
 		Principal: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeUser.Id, Resource: "14"}},
 		Entitlement: &v2.Entitlement{
 			Resource: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
@@ -357,7 +331,7 @@ func TestRoleListFiltersIRM(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	resources, _, _, err := newRoleBuilder(newCloudClientForTest(t, ts), nil).List(context.Background(), nil, &pagination.Token{})
+	resources, _, _, err := newRoleBuilder(newCloudClientForTest(t, ts)).List(context.Background(), nil, &pagination.Token{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -380,7 +354,7 @@ func TestRoleListFiltersIRM(t *testing.T) {
 }
 
 func TestRoleStaticEntitlements(t *testing.T) {
-	builder := newRoleBuilder(nil, nil)
+	builder := newRoleBuilder(nil)
 
 	dynamic, _, _, err := builder.Entitlements(context.Background(), &v2.Resource{}, &pagination.Token{})
 	if err != nil {
@@ -411,8 +385,11 @@ func TestRoleStaticEntitlements(t *testing.T) {
 	if !roleTypeAnnos.Contains(&v2.SkipEntitlements{}) {
 		t.Fatal("role resource type must carry SkipEntitlements with StaticEntitlements")
 	}
-	if !roleTypeAnnos.Contains(&v2.SkipGrants{}) {
-		t.Fatal("role resource type must keep SkipGrants because team builder emits role grants")
+	if !roleTypeAnnos.Contains(&v2.TypeScopedGrants{}) {
+		t.Fatal("role resource type must carry TypeScopedGrants: team→role grants come from GrantsForResourceType")
+	}
+	if roleTypeAnnos.Contains(&v2.SkipGrants{}) {
+		t.Fatal("role resource type must not carry SkipGrants — it would suppress the type-scoped grants op")
 	}
 	if !roleTypeAnnos.Contains(&v2.OptInRequired{}) {
 		t.Fatal("role resource type must be OptInRequired (access-control is Cloud/Enterprise only)")
@@ -420,7 +397,7 @@ func TestRoleStaticEntitlements(t *testing.T) {
 }
 
 func TestTeamStaticEntitlements(t *testing.T) {
-	builder := newTeamBuilder(nil, func() bool { return true })
+	builder := newTeamBuilder(nil)
 
 	dynamic, _, _, err := builder.Entitlements(context.Background(), &v2.Resource{}, &pagination.Token{})
 	if err != nil {
@@ -482,7 +459,7 @@ func TestRoleGrantAlreadyExistsViaPreread(t *testing.T) {
 		t.Fatalf("structpb: %v", err)
 	}
 
-	annos, err := newRoleBuilder(newCloudClientForTest(t, ts), nil).Grant(
+	annos, err := newRoleBuilder(newCloudClientForTest(t, ts)).Grant(
 		context.Background(),
 		&v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
 		&v2.Entitlement{
@@ -537,7 +514,7 @@ func TestRoleGrantUsesCurrentUID(t *testing.T) {
 		t.Fatalf("structpb: %v", err)
 	}
 
-	_, err = newRoleBuilder(newCloudClientForTest(t, ts), nil).Grant(
+	_, err = newRoleBuilder(newCloudClientForTest(t, ts)).Grant(
 		context.Background(),
 		&v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
 		&v2.Entitlement{Resource: &v2.Resource{
@@ -554,7 +531,7 @@ func TestRoleGrantUsesCurrentUID(t *testing.T) {
 }
 
 func TestRoleGrantRejectsOutOfCatalogRole(t *testing.T) {
-	_, err := newRoleBuilder(nil, nil).Grant(
+	_, err := newRoleBuilder(nil).Grant(
 		context.Background(),
 		&v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
 		&v2.Entitlement{Resource: &v2.Resource{
@@ -585,7 +562,7 @@ func TestRoleGrantRejectsHiddenRole(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	_, err := newRoleBuilder(newCloudClientForTest(t, ts), nil).Grant(
+	_, err := newRoleBuilder(newCloudClientForTest(t, ts)).Grant(
 		context.Background(),
 		&v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
 		&v2.Entitlement{Resource: &v2.Resource{
@@ -697,7 +674,7 @@ func TestRoleRevokeIdempotent(t *testing.T) {
 		t.Fatalf("structpb: %v", err)
 	}
 
-	annos, err := newRoleBuilder(newCloudClientForTest(t, ts), nil).Revoke(context.Background(), &v2.Grant{
+	annos, err := newRoleBuilder(newCloudClientForTest(t, ts)).Revoke(context.Background(), &v2.Grant{
 		Principal: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
 		Entitlement: &v2.Entitlement{
 			Resource: &v2.Resource{
@@ -738,7 +715,7 @@ func TestRoleRevokeUsesCurrentUID(t *testing.T) {
 	if err != nil {
 		t.Fatalf("structpb: %v", err)
 	}
-	_, err = newRoleBuilder(newCloudClientForTest(t, ts), nil).Revoke(context.Background(), &v2.Grant{
+	_, err = newRoleBuilder(newCloudClientForTest(t, ts)).Revoke(context.Background(), &v2.Grant{
 		Principal: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
 		Entitlement: &v2.Entitlement{Resource: &v2.Resource{
 			Id:      &v2.ResourceId{ResourceType: resourceTypeRole.Id, Resource: "plugins:grafana-irm-app:schedules-editor"},
@@ -778,7 +755,7 @@ func TestRoleListErrorsWhenRBACUnavailable(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	_, _, _, err := newRoleBuilder(newCloudClientForTest(t, ts), nil).List(context.Background(), nil, &pagination.Token{})
+	_, _, _, err := newRoleBuilder(newCloudClientForTest(t, ts)).List(context.Background(), nil, &pagination.Token{})
 	if err == nil {
 		t.Fatal("expected List to error when access-control is unavailable")
 	}
@@ -790,13 +767,15 @@ func TestRoleListErrorsWhenRBACForbidden(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	_, _, _, err := newRoleBuilder(newCloudClientForTest(t, ts), nil).List(context.Background(), nil, &pagination.Token{})
+	_, _, _, err := newRoleBuilder(newCloudClientForTest(t, ts)).List(context.Background(), nil, &pagination.Token{})
 	if err == nil {
 		t.Fatal("expected List to error when access-control is forbidden")
 	}
 }
 
-func TestTeamRoleGrantsSkipsHiddenRoles(t *testing.T) {
+// GrantsForResourceType emits team→role grants (role-side, type-scoped), skips
+// Hidden and non-IRM/OnCall roles, and batches the whole page in one search.
+func TestRoleGrantsForResourceTypeEmitsTeamRoleGrants(t *testing.T) {
 	var teamRoleSearchCalls int
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -810,8 +789,6 @@ func TestTeamRoleGrantsSkipsHiddenRoles(t *testing.T) {
 					{"id": 8, "uid": "t8", "orgId": 1, "name": "B", "memberCount": 0},
 				},
 			})
-		case r.Method == http.MethodGet && (r.URL.Path == "/api/teams/7/members" || r.URL.Path == "/api/teams/8/members"):
-			writeJSON(w, http.StatusOK, []map[string]any{})
 		case r.Method == http.MethodPost && r.URL.Path == "/api/access-control/teams/roles/search":
 			teamRoleSearchCalls++
 			var req struct {
@@ -829,6 +806,7 @@ func TestTeamRoleGrantsSkipsHiddenRoles(t *testing.T) {
 					out[key] = []map[string]any{
 						{"uid": "vis", "name": "plugins:grafana-irm-app:schedules-editor", "displayName": "Schedules Editor"},
 						{"uid": "hid", "name": "plugins:grafana-irm-app:admin", "displayName": "Admin", "hidden": true},
+						{"uid": "fix", "name": "fixed:reports:reader", "displayName": "Report reader"},
 					}
 				} else {
 					out[key] = []map[string]any{}
@@ -841,175 +819,98 @@ func TestTeamRoleGrantsSkipsHiddenRoles(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	builder := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return true })
-	resources, _, _, err := builder.List(context.Background(), nil, &pagination.Token{})
+	builder := newRoleBuilder(newCloudClientForTest(t, ts))
+	grants, res, err := builder.GrantsForResourceType(context.Background(), resourceTypeRole.Id, rs.SyncOpAttrs{})
 	if err != nil {
-		t.Fatalf("List: %v", err)
+		t.Fatalf("GrantsForResourceType: %v", err)
 	}
-	if len(resources) != 2 {
-		t.Fatalf("resources=%d", len(resources))
-	}
-
-	if teamRoleSearchCalls != 1 {
-		t.Fatalf("expected one batched team-roles search call for the List page, got %d", teamRoleSearchCalls)
-	}
-
-	for _, resource := range resources {
-		joined, ok := rs.GetProfileStringValue(resource.GetProfile(), profileKeyAssignedRoleNames)
-		if !ok {
-			t.Fatalf("team %s: expected assigned_role_names on profile after List", resource.Id.Resource)
-		}
-		if resource.Id.Resource == "7" && joined != "plugins:grafana-irm-app:schedules-editor" {
-			t.Fatalf("team 7 assigned_role_names=%q", joined)
-		}
-		if resource.Id.Resource == "8" && joined != "" {
-			t.Fatalf("team 8 assigned_role_names=%q, want empty", joined)
-		}
-	}
-
-	searchCallsBeforeGrants := teamRoleSearchCalls
-	for _, resource := range resources {
-		grants, _, _, err := builder.Grants(context.Background(), resource, &pagination.Token{})
-		if err != nil {
-			t.Fatalf("Grants(%s): %v", resource.Id.Resource, err)
-		}
-		if resource.Id.Resource == "7" {
-			if len(grants) != 1 {
-				t.Fatalf("team 7: expected 1 visible role grant, got %d", len(grants))
-			}
-			if grants[0].Entitlement.Resource.Id.Resource != "plugins:grafana-irm-app:schedules-editor" {
-				t.Fatalf("unexpected role %s", grants[0].Entitlement.Resource.Id.Resource)
-			}
-		}
-	}
-	if teamRoleSearchCalls != searchCallsBeforeGrants {
-		t.Fatalf("Grants must not re-search team roles when profile carries assigned_role_names; calls %d → %d", searchCallsBeforeGrants, teamRoleSearchCalls)
-	}
-}
-
-func TestTeamGrantsSkipRoleEmissionWhenRolesNotListed(t *testing.T) {
-	var teamRoleSearchCalls int
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/teams/search":
-			writeJSON(w, http.StatusOK, map[string]any{
-				"teams": []map[string]any{{"id": 7, "name": "Ops", "orgId": 1}},
-			})
-		case "/api/teams/7/members":
-			writeJSON(w, http.StatusOK, []map[string]any{})
-		case "/api/access-control/teams/roles/search":
-			teamRoleSearchCalls++
-			writeJSON(w, http.StatusOK, map[string]any{
-				"7": []map[string]any{
-					{"uid": "r1", "name": "plugins:grafana-irm-app:admin", "displayName": "Admin", "group": "IRM"},
-				},
-			})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer ts.Close()
-
-	// rolesWereListed=false simulates OptIn-off: roleBuilder.List never ran.
-	builder := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return false })
-	resources, _, _, err := builder.List(context.Background(), nil, &pagination.Token{})
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	if len(resources) != 1 {
-		t.Fatalf("resources=%d", len(resources))
+	if res == nil || res.NextPageToken != "" {
+		t.Fatalf("expected single page, got results=%+v", res)
 	}
 	if teamRoleSearchCalls != 1 {
-		t.Fatalf("List still batches team-role search; got %d calls", teamRoleSearchCalls)
+		t.Fatalf("expected one batched team-roles search call, got %d", teamRoleSearchCalls)
 	}
-
-	grants, _, _, err := builder.Grants(context.Background(), resources[0], &pagination.Token{})
-	if err != nil {
-		t.Fatalf("Grants: %v", err)
-	}
-	for _, g := range grants {
-		if g.GetEntitlement().GetResource().GetId().GetResourceType() == resourceTypeRoleID {
-			t.Fatalf("unexpected role grant when roles were not listed: %+v", g)
-		}
-	}
-}
-
-// On OSS the whole /api/access-control route set is absent, so the role search
-// itself answers 404. Member grants must survive that.
-func TestTeamRoleGrantsSoftSkipOnOSSPreservingMembers(t *testing.T) {
-	var teamRoleSearchCalls int
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/teams/7/members":
-			writeJSON(w, http.StatusOK, []map[string]any{
-				{"orgId": 1, "teamId": 7, "userId": 14, "email": "a@ex.com", "login": "alice", "name": "Alice", "permission": 0},
-			})
-		case "/api/access-control/teams/roles/search":
-			teamRoleSearchCalls++
-			writeJSON(w, http.StatusNotFound, map[string]string{"message": "Not found"})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer ts.Close()
-
-	resource := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}}
-	grants, _, _, err := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return true }).Grants(context.Background(), resource, &pagination.Token{})
-	if err != nil {
-		t.Fatalf("Grants: %v", err)
-	}
+	// Only team 7's visible IRM role survives (Hidden + fixed: are filtered).
 	if len(grants) != 1 {
-		t.Fatalf("expected member grant preserved on OSS, got %d grants", len(grants))
+		t.Fatalf("expected 1 emitted role grant, got %d", len(grants))
 	}
-	if grants[0].Principal.Id.Resource != "14" {
-		t.Fatalf("expected principal 14, got %q", grants[0].Principal.Id.Resource)
+	g := grants[0]
+	if g.Entitlement.Resource.Id.ResourceType != resourceTypeRole.Id ||
+		g.Entitlement.Resource.Id.Resource != "plugins:grafana-irm-app:schedules-editor" {
+		t.Fatalf("unexpected role entitlement: %+v", g.Entitlement.Resource.Id)
 	}
-	if teamRoleSearchCalls != 1 {
-		t.Fatalf("expected one team-roles search call, got %d", teamRoleSearchCalls)
+	if g.Principal.Id.ResourceType != resourceTypeTeam.Id || g.Principal.Id.Resource != "7" {
+		t.Fatalf("unexpected principal (team): %+v", g.Principal.Id)
+	}
+	annos := annotations.Annotations(g.Annotations)
+	var expandable v2.GrantExpandable
+	ok, err := annos.Pick(&expandable)
+	if err != nil || !ok {
+		t.Fatal("expected GrantExpandable annotation on team→role grant")
+	}
+	if !expandable.Shallow {
+		t.Fatal("expected GrantExpandable.Shallow=true")
+	}
+	wantMemberEnt := ent.NewEntitlementID(
+		&v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
+		teamMemberEntitlement,
+	)
+	if len(expandable.EntitlementIds) != 1 || expandable.EntitlementIds[0] != wantMemberEnt {
+		t.Fatalf("expandable entitlement ids=%v want [%s]", expandable.EntitlementIds, wantMemberEnt)
 	}
 }
 
-func TestTeamRoleGrantsPropagatesSearchServerError(t *testing.T) {
+// The role type is OptIn-off by default, so the SDK never schedules the
+// type-scoped grants op — team membership must still sync on every edition with
+// no dependency on the access-control API.
+func TestTeamGrantsMemberOnly(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/teams/7/members":
+		if r.URL.Path == "/api/teams/7/members" {
 			writeJSON(w, http.StatusOK, []map[string]any{
 				{"orgId": 1, "teamId": 7, "userId": 14, "email": "a@ex.com", "login": "alice", "name": "Alice", "permission": 0},
 			})
-		case "/api/access-control/teams/roles/search":
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "boom"})
-		default:
-			http.NotFound(w, r)
+			return
 		}
+		http.NotFound(w, r)
 	}))
 	defer ts.Close()
 
 	resource := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}}
-	_, _, _, err := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return true }).Grants(context.Background(), resource, &pagination.Token{})
-	if err == nil {
-		t.Fatal("expected role-search 500 to fail Grants")
+	grants, _, _, err := newTeamBuilder(newCloudClientForTest(t, ts)).Grants(context.Background(), resource, &pagination.Token{})
+	if err != nil {
+		t.Fatalf("Grants: %v", err)
+	}
+	if len(grants) != 1 || grants[0].Principal.Id.Resource != "14" {
+		t.Fatalf("expected only the member grant for user 14, got %+v", grants)
 	}
 }
 
-func TestTeamRoleGrantsPropagatesSearchForbidden(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/teams/7/members":
-			writeJSON(w, http.StatusOK, []map[string]any{
-				{"orgId": 1, "teamId": 7, "userId": 14, "email": "a@ex.com", "login": "alice", "name": "Alice", "permission": 0},
-			})
-		case "/api/access-control/teams/roles/search":
-			writeJSON(w, http.StatusForbidden, map[string]string{"message": "Access denied"})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer ts.Close()
+// The type-scoped grants op only runs when roles are opted in, which requires a
+// reachable access-control API. Any error from the batch search must fail closed
+// (never emit an empty set that C1 reads as a mass revoke of team→role grants).
+func TestRoleGrantsForResourceTypeFailsClosed(t *testing.T) {
+	statuses := []int{http.StatusNotFound, http.StatusForbidden, http.StatusInternalServerError}
+	for _, code := range statuses {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/teams/search":
+					writeJSON(w, http.StatusOK, map[string]any{
+						"teams": []map[string]any{{"id": 7, "name": "Ops", "orgId": 1}},
+					})
+				case "/api/access-control/teams/roles/search":
+					writeJSON(w, code, map[string]string{"message": "nope"})
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer ts.Close()
 
-	resource := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}}
-	_, _, _, err := newTeamBuilder(newCloudClientForTest(t, ts), func() bool { return true }).Grants(context.Background(), resource, &pagination.Token{})
-	if err == nil {
-		t.Fatal("expected role-search 403 to fail Grants (avoid wiping role grants)")
+			_, _, err := newRoleBuilder(newCloudClientForTest(t, ts)).GrantsForResourceType(context.Background(), resourceTypeRole.Id, rs.SyncOpAttrs{})
+			if err == nil {
+				t.Fatalf("expected team-roles search %d to fail GrantsForResourceType", code)
+			}
+		})
 	}
 }
 
@@ -1028,7 +929,7 @@ func TestRoleRevokeOSSUnavailable(t *testing.T) {
 		t.Fatalf("structpb: %v", err)
 	}
 
-	_, err = newRoleBuilder(newCloudClientForTest(t, ts), nil).Revoke(context.Background(), &v2.Grant{
+	_, err = newRoleBuilder(newCloudClientForTest(t, ts)).Revoke(context.Background(), &v2.Grant{
 		Principal: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
 		Entitlement: &v2.Entitlement{
 			Resource: &v2.Resource{

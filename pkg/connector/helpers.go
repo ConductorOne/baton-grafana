@@ -40,14 +40,10 @@ const (
 	profileKeyGlobal      = "global"
 	profileKeyTeamID      = "team_id"
 	profileKeyMemberCount = "member_count"
-	// Comma-joined stable RBAC role names (API `name`) assigned to the team.
-	// Key present (even when empty) means team List already resolved RBAC for
-	// this page — Grants must not re-call the search API.
-	profileKeyAssignedRoleNames = "assigned_role_names"
-	profileKeySAID              = "service_account_id"
-	profileKeyTokens            = "tokens"
-	profileKeyIsExternal        = "is_external"
-	profileKeyIsDisabled        = "is_disabled"
+	profileKeySAID        = "service_account_id"
+	profileKeyTokens      = "tokens"
+	profileKeyIsExternal  = "is_external"
+	profileKeyIsDisabled  = "is_disabled"
 
 	// Account-creation profile field keys must match AccountCreationSchema so the
 	// submitted values reach CreateAccount.
