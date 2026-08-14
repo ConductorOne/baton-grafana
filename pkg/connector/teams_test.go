@@ -890,14 +890,14 @@ func TestTeamRoleGrantsSkipsHiddenRoles(t *testing.T) {
 func TestTeamListSkipsRoleSearchWhenRolesNotSynced(t *testing.T) {
 	var teamRoleSearchCalls int
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/api/teams/search":
+		switch r.URL.Path {
+		case "/api/teams/search":
 			writeJSON(w, http.StatusOK, map[string]any{
 				"teams": []map[string]any{{"id": 7, "name": "Ops", "orgId": 1}},
 			})
-		case r.URL.Path == "/api/teams/7/members":
+		case "/api/teams/7/members":
 			writeJSON(w, http.StatusOK, []map[string]any{})
-		case r.URL.Path == "/api/access-control/teams/roles/search":
+		case "/api/access-control/teams/roles/search":
 			teamRoleSearchCalls++
 			writeJSON(w, http.StatusOK, map[string]any{})
 		default:
