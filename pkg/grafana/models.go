@@ -234,6 +234,17 @@ func (r *rolesListResponse) UnmarshalJSON(data []byte) error {
 		*r = roles
 		return nil
 	}
+	// Nested role-detail mocks redirect the list path and return
+	// {"permissions":[…], …}. That is not a role catalog.
+	var probe struct {
+		Permissions json.RawMessage `json:"permissions"`
+	}
+	if err := json.Unmarshal(trimmed, &probe); err != nil {
+		return err
+	}
+	if probe.Permissions == nil {
+		return fmt.Errorf("unexpected roles list object")
+	}
 	*r = nil
 	return nil
 }

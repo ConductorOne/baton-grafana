@@ -441,7 +441,7 @@ func (c *Client) ListTeams(ctx context.Context, pVars *PaginationVars) ([]Team, 
 	}
 
 	var nextPage uint64
-	if uint64(len(resp.Teams)) == pVars.Size {
+	if pVars != nil && uint64(len(resp.Teams)) == pVars.Size {
 		nextPage = pVars.Page + 1
 	}
 	return resp.Teams, nextPage, nil
@@ -502,7 +502,7 @@ func (c *Client) ListServiceAccounts(ctx context.Context, pVars *PaginationVars)
 	}
 
 	var nextPage uint64
-	if uint64(len(resp.ServiceAccounts)) == pVars.Size {
+	if pVars != nil && uint64(len(resp.ServiceAccounts)) == pVars.Size {
 		nextPage = pVars.Page + 1
 	}
 	return resp.ServiceAccounts, nextPage, nil

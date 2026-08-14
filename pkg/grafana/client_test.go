@@ -288,3 +288,20 @@ func TestListRolesAcceptsArrayAndObjectWrapper(t *testing.T) {
 		})
 	}
 }
+
+func TestListRolesRejectsUnknownObject(t *testing.T) {
+	t.Parallel()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{"roles": []any{}})
+	}))
+	t.Cleanup(ts.Close)
+
+	client, err := NewClient(context.Background(), ts.URL, "", "", "token")
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	if _, err := client.ListRoles(context.Background()); err == nil {
+		t.Fatal("expected error for unrecognized object shape")
+	}
+}

@@ -3,9 +3,10 @@ package grafana
 import (
 	"errors"
 	"fmt"
-	"net/http"
 	"net/url"
-	"strings"
+
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const (
@@ -87,5 +88,5 @@ func setupPagination(addr *url.URL, paginationVars *PaginationVars) *url.Values 
 // both the per-team GET and the search POST answer 200 with an empty body for
 // an unknown team id, so a 404 unambiguously means the API itself is absent.
 func rbacUnavailable(err error) bool {
-	return strings.Contains(err.Error(), fmt.Sprintf("%d", http.StatusNotFound))
+	return status.Code(err) == codes.NotFound
 }

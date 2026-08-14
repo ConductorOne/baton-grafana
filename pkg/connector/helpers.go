@@ -45,9 +45,9 @@ const (
 	// this page — Grants must not re-call the search API.
 	profileKeyAssignedRoleNames = "assigned_role_names"
 	profileKeySAID              = "service_account_id"
-	profileKeyTokens      = "tokens"
-	profileKeyIsExternal  = "is_external"
-	profileKeyIsDisabled  = "is_disabled"
+	profileKeyTokens            = "tokens"
+	profileKeyIsExternal        = "is_external"
+	profileKeyIsDisabled        = "is_disabled"
 
 	// Account-creation profile field keys must match AccountCreationSchema so the
 	// submitted values reach CreateAccount.

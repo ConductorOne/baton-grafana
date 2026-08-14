@@ -8,6 +8,7 @@ import (
 	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/cli"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
@@ -15,7 +16,8 @@ import (
 
 // Grafana represents the Baton connector for Grafana.
 type Grafana struct {
-	client *grafana.Client
+	client    *grafana.Client
+	syncRoles bool
 }
 
 // ResourceSyncers returns a list of syncers for different resource types.
@@ -23,7 +25,7 @@ func (g *Grafana) ResourceSyncers(ctx context.Context) []connectorbuilder.Resour
 	return []connectorbuilder.ResourceSyncer{
 		newOrgBuilder(g.client),
 		newUserBuilder(g.client),
-		newTeamBuilder(g.client),
+		newTeamBuilder(g.client, g.syncRoles),
 		newRoleBuilder(g.client),
 		newServiceAccountBuilder(g.client),
 	}
@@ -114,7 +116,8 @@ func (g *Grafana) Validate(ctx context.Context) (annotations.Annotations, error)
 // New initializes a new instance of the Grafana connector.
 // When apiToken is non-empty the connector operates in Cloud mode (Bearer auth, current-org scope).
 // When apiToken is empty the connector operates in self-hosted mode (Basic auth, server-admin scope).
-func New(ctx context.Context, hostname, username, password, apiToken string) (*Grafana, error) {
+// A nil opts means capabilities introspection — default to syncing every advertised type.
+func New(ctx context.Context, hostname, username, password, apiToken string, opts *cli.ConnectorOpts) (*Grafana, error) {
 	grafanaClient, err := grafana.NewClient(ctx, hostname, username, password, apiToken)
 	if err != nil {
 		l := ctxzap.Extract(ctx)
@@ -122,7 +125,10 @@ func New(ctx context.Context, hostname, username, password, apiToken string) (*G
 		return nil, err
 	}
 
+	syncRoles := opts == nil || opts.WillSyncResourceType(resourceTypeRoleID)
+
 	return &Grafana{
-		client: grafanaClient,
+		client:    grafanaClient,
+		syncRoles: syncRoles,
 	}, nil
 }

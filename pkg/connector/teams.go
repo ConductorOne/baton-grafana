@@ -21,11 +21,12 @@ import (
 )
 
 type teamBuilder struct {
-	client *grafana.Client
+	client    *grafana.Client
+	syncRoles bool
 }
 
-func newTeamBuilder(client *grafana.Client) *teamBuilder {
-	return &teamBuilder{client: client}
+func newTeamBuilder(client *grafana.Client, syncRoles bool) *teamBuilder {
+	return &teamBuilder{client: client, syncRoles: syncRoles}
 }
 
 func (t *teamBuilder) ResourceType(_ context.Context) *v2.ResourceType {
@@ -85,28 +86,37 @@ func (t *teamBuilder) List(ctx context.Context, _ *v2.ResourceId, pToken *pagina
 
 	// One POST /api/access-control/teams/roles/search per List page (batch teamIds).
 	// Carry filtered role names on each team profile so Grants does not re-search.
-	teamIDs := make([]int, 0, len(teams))
-	for _, team := range teams {
-		teamIDs = append(teamIDs, team.ID)
-	}
+	// Skip when the role type is not in this sync (OptInRequired + not enabled) so
+	// we neither call RBAC nor emit dangling role grants.
+	rolesByTeam := map[string][]grafana.Role{}
+	if t.syncRoles {
+		teamIDs := make([]int, 0, len(teams))
+		for _, team := range teams {
+			teamIDs = append(teamIDs, team.ID)
+		}
 
-	var rolesByTeam map[string][]grafana.Role
-	rolesByTeam, err = t.client.ListRolesForTeams(ctx, teamIDs)
-	switch {
-	case err == nil:
-	case errors.Is(err, grafana.ErrRBACUnavailable):
-		ctxzap.Extract(ctx).Debug(
-			"grafana-connector: access-control unavailable; team List continuing without role assignments",
-		)
-		rolesByTeam = map[string][]grafana.Role{}
-	default:
-		return nil, "", nil, fmt.Errorf("grafana-connector: failed to list roles for teams: %w", err)
+		var err error
+		rolesByTeam, err = t.client.ListRolesForTeams(ctx, teamIDs)
+		switch {
+		case err == nil:
+		case errors.Is(err, grafana.ErrRBACUnavailable):
+			ctxzap.Extract(ctx).Debug(
+				"grafana-connector: access-control unavailable; team List continuing without role assignments",
+			)
+			rolesByTeam = map[string][]grafana.Role{}
+		default:
+			return nil, "", nil, fmt.Errorf("grafana-connector: failed to list roles for teams: %w", err)
+		}
 	}
 
 	resources := make([]*v2.Resource, 0, len(teams))
 	for _, team := range teams {
-		joined := strings.Join(emitableRoleNames(rolesByTeam[strconv.Itoa(team.ID)]), ",")
-		resource, err := teamResource(team, &joined)
+		var assigned *string
+		if t.syncRoles {
+			joined := strings.Join(emitableRoleNames(rolesByTeam[strconv.Itoa(team.ID)]), ",")
+			assigned = &joined
+		}
+		resource, err := teamResource(team, assigned)
 		if err != nil {
 			return nil, "", nil, fmt.Errorf("grafana-connector: failed to create team resource %q: %w", team.Name, err)
 		}
@@ -175,6 +185,12 @@ func (t *teamBuilder) Grants(ctx context.Context, resource *v2.Resource, _ *pagi
 	// sync on every Grafana edition, so an absent access-control API only skips
 	// role grants and keeps the member grants already built. Every other failure
 	// (permissions, 5xx) fails closed instead of emitting an empty role set.
+	// When the role type is not in this sync, skip entirely to avoid dangling
+	// grants to unsynced role entitlements.
+	if !t.syncRoles {
+		return grants, "", nil, nil
+	}
+
 	roleGrants, err := t.teamRoleGrants(ctx, resource, teamID)
 	if err != nil {
 		if errors.Is(err, grafana.ErrRBACUnavailable) {
