@@ -215,6 +215,29 @@ type Role struct {
 	Global      bool   `json:"global"`
 }
 
+// rolesListResponse decodes GET /api/access-control/roles. Live Grafana returns
+// a JSON array. Some mocks redirect the list path into a role-detail wrapper
+// object ({"permissions":[]}); treat that as an empty catalog.
+type rolesListResponse []Role
+
+func (r *rolesListResponse) UnmarshalJSON(data []byte) error {
+	trimmed := bytes.TrimSpace(data)
+	if len(trimmed) == 0 {
+		*r = nil
+		return nil
+	}
+	if trimmed[0] == '[' {
+		var roles []Role
+		if err := json.Unmarshal(trimmed, &roles); err != nil {
+			return err
+		}
+		*r = roles
+		return nil
+	}
+	*r = nil
+	return nil
+}
+
 // AssignRoleToTeamRequest is the body for POST /api/access-control/teams/:id/roles.
 type AssignRoleToTeamRequest struct {
 	RoleUID string `json:"roleUid"`

@@ -228,3 +228,63 @@ func TestListServiceAccountsAcceptsObjectAndArray(t *testing.T) {
 		})
 	}
 }
+
+func TestListRolesAcceptsArrayAndObjectWrapper(t *testing.T) {
+	t.Parallel()
+
+	tests := []struct {
+		name string
+		body any
+		want int
+	}{
+		{
+			name: "role catalog array",
+			body: []map[string]any{
+				{"uid": "r1", "name": "fixed:irm:admin", "displayName": "Admin", "group": "IRM"},
+			},
+			want: 1,
+		},
+		{
+			name: "empty array",
+			body: []any{},
+			want: 0,
+		},
+		{
+			name: "permissions wrapper object",
+			body: map[string]any{
+				"permissions": []any{},
+				"total":       0,
+				"startAt":     0,
+				"maxResults":  0,
+			},
+			want: 0,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path != "/api/access-control/roles" {
+					t.Errorf("path=%s", r.URL.Path)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(tc.body)
+			}))
+			t.Cleanup(ts.Close)
+
+			client, err := NewClient(context.Background(), ts.URL, "", "", "token")
+			if err != nil {
+				t.Fatalf("NewClient: %v", err)
+			}
+
+			roles, err := client.ListRoles(context.Background())
+			if err != nil {
+				t.Fatalf("ListRoles: %v", err)
+			}
+			if len(roles) != tc.want {
+				t.Fatalf("got %d roles, want %d", len(roles), tc.want)
+			}
+		})
+	}
+}

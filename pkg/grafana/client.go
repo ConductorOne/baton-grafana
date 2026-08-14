@@ -512,7 +512,7 @@ func (c *Client) ListServiceAccounts(ctx context.Context, pVars *PaginationVars)
 // The endpoint returns all roles in one response and is not paginated.
 // HTTP 404 maps to ErrRBACUnavailable (OSS build without access-control).
 func (c *Client) ListRoles(ctx context.Context) ([]Role, error) {
-	var roles []Role
+	var roles rolesListResponse
 
 	err := c.doRequest(ctx, http.MethodGet, c.buildResourceURL(AccessControlRolesPath), &roles, nil, nil)
 	if err != nil {
@@ -522,7 +522,7 @@ func (c *Client) ListRoles(ctx context.Context) ([]Role, error) {
 		return nil, fmt.Errorf("grafana-client: list roles: %w", err)
 	}
 
-	return roles, nil
+	return []Role(roles), nil
 }
 
 // ListTeamRoles calls GET /api/access-control/teams/{id}/roles.
