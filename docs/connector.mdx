@@ -10,8 +10,19 @@ sidebarTitle: "Grafana"
 
 | Resource | Sync | Provision |
 | :--- | :--- | :--- |
-| Accounts | <Icon icon="square-check" iconType="solid"  color="#c937ae"/> | <Icon icon="square-check" iconType="solid"  color="#c937ae"/> |
-| Organizations | <Icon icon="square-check" iconType="solid"  color="#c937ae"/> | <Icon icon="square-check" iconType="solid"  color="#c937ae"/> |
+| Accounts | <Icon icon="square-check" iconType="solid" color="#c937ae"/> | <Icon icon="square-check" iconType="solid" color="#c937ae"/> |
+| Organizations | <Icon icon="square-check" iconType="solid" color="#c937ae"/> | <Icon icon="square-check" iconType="solid" color="#c937ae"/> |
+| Teams | <Icon icon="square-check" iconType="solid" color="#c937ae"/> | <Icon icon="square-check" iconType="solid" color="#c937ae"/> |
+| Roles | <Icon icon="square-check" iconType="solid" color="#c937ae"/> | <Icon icon="square-check" iconType="solid" color="#c937ae"/> |
+| Service accounts | <Icon icon="square-check" iconType="solid" color="#c937ae"/> | |
+
+Team membership can be granted and revoked (`/api/teams/{id}/members`). Grafana RBAC roles that a team holds are synced and can be assigned to or removed from a team (`/api/access-control/teams/{id}/roles`); the connector syncs the IRM and OnCall plugin roles (for example **Schedules Editor**), which require Grafana Cloud or Enterprise. Service accounts are synced with their organization role; they are read-only.
+
+<Note>
+**Roles are optional**
+
+IRM / OnCall RBAC roles are available only on Grafana Cloud and Enterprise. Role sync is disabled by default — enable the **Role** resource type in the connector's settings in C1 when your instance has access-control. Teams and service accounts sync by default.
+</Note>
 
 The Grafana connector supports both **self-hosted Grafana** instances and **Grafana Cloud**. The required credentials and provisioning behavior differ between the two — see [Gather Grafana credentials](#gather-grafana-credentials) below.
 

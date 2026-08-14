@@ -3,7 +3,6 @@ package grafana
 import (
 	"context"
 	"encoding/base64"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -13,36 +12,6 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 )
-
-const (
-	// Self-hosted (server-admin) endpoints.
-	ListUsersPath         = "/api/users"
-	GetUserByIDPath       = "/api/users/%d"
-	CreateUserPath        = "/api/admin/users"
-	DeleteUserPath        = "/api/admin/users/%s"
-	ListOrgsPath          = "/api/orgs"
-	ListUsersInOrgPath    = "/api/orgs/%s/users"
-	AddUserToOrgPath      = "/api/orgs/%s/users"
-	RemoveUserFromOrgPath = "/api/orgs/%s/users/%d"
-	OrgsForUserPath       = "/api/users/%d/orgs"
-
-	// Cloud-mode endpoints (current-org scope only).
-	GetCurrentOrgPath        = "/api/org"
-	CurrentOrgUsersPath      = "/api/org/users"
-	UpdateCurrentOrgUserPath = "/api/org/users/%d" // Update role - PATCH — to update | DELETE — to remove
-	InviteUserPath           = "/api/org/invites"
-)
-
-// ErrUserAlreadyExists is returned when attempting to create a user that already exists in Grafana.
-var ErrUserAlreadyExists = errors.New("grafana-client: user already exists")
-
-// ErrExternalUserLoginDisabled is returned when POST /api/org/invites rejects a
-// brand-new external user because the instance's basic login form is disabled.
-// This is the Grafana Cloud default (users authenticate via SSO / grafana.com),
-// so instance-level invites for non-existing users are rejected with HTTP 400
-// "Cannot invite external user when login is disabled." Existing users are added
-// to the org without hitting this check.
-var ErrExternalUserLoginDisabled = errors.New("grafana-client: cannot invite external user when login is disabled")
 
 // NewClient initializes a new Grafana API client.
 // When apiToken is non-empty the client operates in Cloud mode (Bearer auth).
@@ -92,7 +61,7 @@ func (c *Client) IsCloud() bool {
 //
 // If no parameters are given, the template is used as-is.
 // Any errors (like invalid baseURL) can be handled as needed.
-func (c *Client) buildResourceURL(pathTemplate string, args ...interface{}) *url.URL {
+func (c *Client) buildResourceURL(pathTemplate string, args ...any) *url.URL {
 	// If no parameters, just use the raw template
 	finalPath := pathTemplate
 	if len(args) > 0 {
@@ -170,33 +139,13 @@ func (c *Client) ListUsers(ctx context.Context, pVars *PaginationVars) ([]User, 
 	return usersResponse, nextPage, nil
 }
 
-func setupPagination(addr *url.URL, paginationVars *PaginationVars) *url.Values {
-	if paginationVars == nil {
-		return nil
-	}
-
-	q := addr.Query()
-
-	// add page size
-	if paginationVars.Size != 0 {
-		q.Set("perpage", fmt.Sprintf("%d", paginationVars.Size))
-	}
-
-	// add page
-	if paginationVars.Page > 0 {
-		q.Set("page", fmt.Sprintf("%d", paginationVars.Page))
-	}
-
-	return &q
-}
-
 // doRequest handles HTTP requests with authentication and optional pagination.
 func (c *Client) doRequest(
 	ctx context.Context,
 	method string,
 	urlAddress *url.URL,
-	response interface{},
-	data interface{},
+	response any,
+	data any,
 	paginationVars *PaginationVars,
 ) error {
 	var err error
@@ -267,15 +216,15 @@ func (c *Client) doRequest(
 // Convert UserByOrg to User.
 func (ubo UserByOrgResponse) ToUser() User {
 	return User{
-		ID:                 ubo.ID, // Maps userId -> id
-		Name:               ubo.Name,
-		Login:              ubo.Login,
-		Email:              ubo.Email,
-		AvatarUrl:          ubo.AvatarUrl,
-		IsDisabled:         ubo.IsDisabled,
-		LastSeenAt:         ubo.LastSeenAt,
-		LastSeenAtAge:      ubo.LastSeenAtAge,
-		AuthLabels:         ubo.AuthLabels,
+		ID:            ubo.ID, // Maps userId -> id
+		Name:          ubo.Name,
+		Login:         ubo.Login,
+		Email:         ubo.Email,
+		AvatarUrl:     ubo.AvatarUrl,
+		IsDisabled:    ubo.IsDisabled,
+		LastSeenAt:    ubo.LastSeenAt,
+		LastSeenAtAge: ubo.LastSeenAtAge,
+		AuthLabels:    ubo.AuthLabels,
 		// UserByOrgResponse.IsExternallySynced is a plain bool, so this pointer is non-nil
 		// by construction, independent of the API. It carries a meaningful value only on the
 		// Cloud List path (/api/org/users, which populates the key); ToUser() is also used on
@@ -477,6 +426,172 @@ func (c *Client) RemoveUserFromOrg(ctx context.Context, orgID string, userID int
 	)
 	if err != nil {
 		return fmt.Errorf("grafana-client: remove user from org: %w", err)
+	}
+
+	return nil
+}
+
+// ListTeams calls GET /api/teams/search (page/perpage, 1-based).
+func (c *Client) ListTeams(ctx context.Context, pVars *PaginationVars) ([]Team, uint64, error) {
+	var resp TeamSearchResponse
+
+	err := c.doRequest(ctx, http.MethodGet, c.buildResourceURL(SearchTeamsPath), &resp, nil, pVars)
+	if err != nil {
+		return nil, 0, fmt.Errorf("grafana-client: list teams: %w", err)
+	}
+
+	var nextPage uint64
+	if uint64(len(resp.Teams)) == pVars.Size {
+		nextPage = pVars.Page + 1
+	}
+	return resp.Teams, nextPage, nil
+}
+
+// ListTeamMembers calls GET /api/teams/{id}/members (not paginated).
+func (c *Client) ListTeamMembers(ctx context.Context, teamID int) ([]TeamMember, error) {
+	var members []TeamMember
+
+	err := c.doRequest(ctx, http.MethodGet, c.buildResourceURL(TeamMembersPath, teamID), &members, nil, nil)
+	if err != nil {
+		return nil, fmt.Errorf("grafana-client: list team members: %w", err)
+	}
+
+	return members, nil
+}
+
+// AddUserToTeam calls POST /api/teams/{id}/members with {"userId": N}.
+// HTTP 400 with "already added to this team" maps to ErrTeamMemberAlreadyExists.
+func (c *Client) AddUserToTeam(ctx context.Context, teamID, userID int) error {
+	req := &AddUserToTeamRequest{UserID: userID}
+
+	err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(TeamMembersPath, teamID), nil, req, nil)
+	if err != nil {
+		if strings.Contains(err.Error(), fmt.Sprintf("%d", http.StatusBadRequest)) &&
+			strings.Contains(strings.ToLower(err.Error()), "already added to this team") {
+			return fmt.Errorf("%w: %w", ErrTeamMemberAlreadyExists, err)
+		}
+		return fmt.Errorf("grafana-client: add user to team: %w", err)
+	}
+
+	return nil
+}
+
+// RemoveUserFromTeam calls DELETE /api/teams/{id}/members/{userId}.
+// HTTP 404 with "Team member not found" maps to ErrTeamMemberNotFound.
+// Other 404 bodies (for example, "Team not found") remain errors.
+func (c *Client) RemoveUserFromTeam(ctx context.Context, teamID, userID int) error {
+	err := c.doRequest(ctx, http.MethodDelete, c.buildResourceURL(TeamMemberByUserPath, teamID, userID), nil, nil, nil)
+	if err != nil {
+		if strings.Contains(err.Error(), fmt.Sprintf("%d", http.StatusNotFound)) &&
+			strings.Contains(err.Error(), "Team member not found") {
+			return fmt.Errorf("%w: %w", ErrTeamMemberNotFound, err)
+		}
+		return fmt.Errorf("grafana-client: remove user from team: %w", err)
+	}
+
+	return nil
+}
+
+// ListServiceAccounts calls GET /api/serviceaccounts/search (page/perpage, 1-based).
+func (c *Client) ListServiceAccounts(ctx context.Context, pVars *PaginationVars) ([]ServiceAccount, uint64, error) {
+	var resp ServiceAccountSearchResponse
+
+	err := c.doRequest(ctx, http.MethodGet, c.buildResourceURL(SearchServiceAccountsPath), &resp, nil, pVars)
+	if err != nil {
+		return nil, 0, fmt.Errorf("grafana-client: list service accounts: %w", err)
+	}
+
+	var nextPage uint64
+	if uint64(len(resp.ServiceAccounts)) == pVars.Size {
+		nextPage = pVars.Page + 1
+	}
+	return resp.ServiceAccounts, nextPage, nil
+}
+
+// ListRoles calls GET /api/access-control/roles.
+// The endpoint returns all roles in one response and is not paginated.
+// HTTP 404 maps to ErrRBACUnavailable (OSS build without access-control).
+func (c *Client) ListRoles(ctx context.Context) ([]Role, error) {
+	var roles []Role
+
+	err := c.doRequest(ctx, http.MethodGet, c.buildResourceURL(AccessControlRolesPath), &roles, nil, nil)
+	if err != nil {
+		if rbacUnavailable(err) {
+			return nil, fmt.Errorf("%w: %w", ErrRBACUnavailable, err)
+		}
+		return nil, fmt.Errorf("grafana-client: list roles: %w", err)
+	}
+
+	return roles, nil
+}
+
+// ListTeamRoles calls GET /api/access-control/teams/{id}/roles.
+// The endpoint is not paginated and answers 200 with an empty list for an
+// unknown team. HTTP 404 maps to ErrRBACUnavailable (OSS build without
+// access-control). Prefer ListRolesForTeams on the sync path.
+func (c *Client) ListTeamRoles(ctx context.Context, teamID int) ([]Role, error) {
+	var roles []Role
+
+	err := c.doRequest(ctx, http.MethodGet, c.buildResourceURL(TeamRolesPath, teamID), &roles, nil, nil)
+	if err != nil {
+		if rbacUnavailable(err) {
+			return nil, fmt.Errorf("%w: %w", ErrRBACUnavailable, err)
+		}
+		return nil, fmt.Errorf("grafana-client: list team roles: %w", err)
+	}
+
+	return roles, nil
+}
+
+// ListRolesForTeams calls POST /api/access-control/teams/roles/search with
+// {"teamIds":[...]}. The response is keyed by team id string → []Role, and an
+// unknown team id yields an empty response rather than an error. An empty
+// teamIDs slice returns an empty map without calling the API. HTTP 404 maps to
+// ErrRBACUnavailable (OSS build without access-control).
+func (c *Client) ListRolesForTeams(ctx context.Context, teamIDs []int) (map[string][]Role, error) {
+	if len(teamIDs) == 0 {
+		return map[string][]Role{}, nil
+	}
+
+	var rolesByTeam map[string][]Role
+	req := &ListRolesForTeamsRequest{TeamIDs: teamIDs}
+	err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(SearchTeamRolesPath), &rolesByTeam, req, nil)
+	if err != nil {
+		if rbacUnavailable(err) {
+			return nil, fmt.Errorf("%w: %w", ErrRBACUnavailable, err)
+		}
+		return nil, fmt.Errorf("grafana-client: list roles for teams: %w", err)
+	}
+	if rolesByTeam == nil {
+		return map[string][]Role{}, nil
+	}
+	return rolesByTeam, nil
+}
+
+// AssignRoleToTeam calls POST /api/access-control/teams/{id}/roles with {"roleUid": "..."}.
+// The API returns HTTP 200 even when the role is already assigned.
+func (c *Client) AssignRoleToTeam(ctx context.Context, teamID int, roleUID string) error {
+	req := &AssignRoleToTeamRequest{RoleUID: roleUID}
+
+	err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(TeamRolesPath, teamID), nil, req, nil)
+	if err != nil {
+		return fmt.Errorf("grafana-client: assign role to team: %w", err)
+	}
+
+	return nil
+}
+
+// RemoveRoleFromTeam calls DELETE /api/access-control/teams/{id}/roles/{roleUid}.
+// HTTP 404 with "Team role not found" maps to ErrTeamRoleNotFound (idempotent
+// revoke). Other 404 bodies (for example, "Team not found") remain errors.
+func (c *Client) RemoveRoleFromTeam(ctx context.Context, teamID int, roleUID string) error {
+	err := c.doRequest(ctx, http.MethodDelete, c.buildResourceURL(TeamRoleByUIDPath, teamID, roleUID), nil, nil, nil)
+	if err != nil {
+		if strings.Contains(err.Error(), fmt.Sprintf("%d", http.StatusNotFound)) &&
+			strings.Contains(err.Error(), "Team role not found") {
+			return fmt.Errorf("%w: %w", ErrTeamRoleNotFound, err)
+		}
+		return fmt.Errorf("grafana-client: remove role from team: %w", err)
 	}
 
 	return nil

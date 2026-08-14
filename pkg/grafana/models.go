@@ -117,3 +117,82 @@ type InviteUserResponse struct {
 	EmailSent   bool   `json:"emailSent"`
 	InviteToken string `json:"inviteToken"`
 }
+
+// Team is a Grafana team from /api/teams/search or /api/teams/:id.
+type Team struct {
+	ID          int    `json:"id"`
+	UID         string `json:"uid"`
+	OrgID       int    `json:"orgId"`
+	Name        string `json:"name"`
+	Email       string `json:"email"`
+	MemberCount int    `json:"memberCount"`
+}
+
+// TeamSearchResponse is the paginated payload from GET /api/teams/search.
+type TeamSearchResponse struct {
+	TotalCount int    `json:"totalCount"`
+	Teams      []Team `json:"teams"`
+	Page       int    `json:"page"`
+	PerPage    int    `json:"perPage"`
+}
+
+// TeamMember is a member of a Grafana team from GET /api/teams/:id/members.
+type TeamMember struct {
+	OrgID      int    `json:"orgId"`
+	TeamID     int    `json:"teamId"`
+	UserID     int    `json:"userId"`
+	Email      string `json:"email"`
+	Name       string `json:"name"`
+	Login      string `json:"login"`
+	AvatarURL  string `json:"avatarUrl"`
+	Permission int    `json:"permission"`
+}
+
+// AddUserToTeamRequest is the body for POST /api/teams/:id/members.
+type AddUserToTeamRequest struct {
+	UserID int `json:"userId"`
+}
+
+// ServiceAccount is a Grafana service account from /api/serviceaccounts/search.
+type ServiceAccount struct {
+	ID         int    `json:"id"`
+	UID        string `json:"uid"`
+	Name       string `json:"name"`
+	Login      string `json:"login"`
+	OrgID      int    `json:"orgId"`
+	IsDisabled bool   `json:"isDisabled"`
+	IsExternal bool   `json:"isExternal"`
+	Role       string `json:"role"`
+	Tokens     int    `json:"tokens"`
+}
+
+// ServiceAccountSearchResponse is the paginated payload from GET /api/serviceaccounts/search.
+type ServiceAccountSearchResponse struct {
+	TotalCount      int              `json:"totalCount"`
+	ServiceAccounts []ServiceAccount `json:"serviceAccounts"`
+	Page            int              `json:"page"`
+	PerPage         int              `json:"perPage"`
+}
+
+// Role is a Grafana RBAC role from GET /api/access-control/roles.
+type Role struct {
+	Version     int    `json:"version"`
+	UID         string `json:"uid"`
+	Name        string `json:"name"`
+	DisplayName string `json:"displayName"`
+	Description string `json:"description"`
+	Group       string `json:"group"`
+	Hidden      bool   `json:"hidden"`
+	Global      bool   `json:"global"`
+}
+
+// AssignRoleToTeamRequest is the body for POST /api/access-control/teams/:id/roles.
+type AssignRoleToTeamRequest struct {
+	RoleUID string `json:"roleUid"`
+}
+
+// ListRolesForTeamsRequest is the body for
+// POST /api/access-control/teams/roles/search.
+type ListRolesForTeamsRequest struct {
+	TeamIDs []int `json:"teamIds"`
+}

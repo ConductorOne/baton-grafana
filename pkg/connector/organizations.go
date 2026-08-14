@@ -18,14 +18,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	roleViewer = "Viewer"
-	roleEditor = "Editor"
-	roleAdmin  = "Admin"
-)
-
-var userRoles = []string{roleViewer, roleEditor, roleAdmin}
-
 type orgBuilder struct {
 	resourceType *v2.ResourceType
 	client       *grafana.Client

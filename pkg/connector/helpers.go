@@ -3,7 +3,9 @@ package connector
 import (
 	"fmt"
 	"strconv"
+	"strings"
 
+	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
@@ -11,7 +13,49 @@ import (
 	"golang.org/x/text/language"
 )
 
-const ResourcesPageSize uint64 = 50
+const (
+	ResourcesPageSize uint64 = 50
+
+	// Org role entitlement slugs (also used as Grafana role strings).
+	roleViewer = "Viewer"
+	roleEditor = "Editor"
+	roleAdmin  = "Admin"
+
+	teamMemberEntitlement   = "member"
+	roleAssignedEntitlement = "assigned"
+
+	// Role `name` prefixes from GET /api/access-control/roles for IRM and the
+	// legacy OnCall plugin. `name` is stable across stacks; `uid` is
+	// instance-specific and is required by POST/DELETE team-role endpoints.
+	irmRolePrefix    = "plugins:grafana-irm-app:"
+	onCallRolePrefix = "plugins:grafana-oncall-app:"
+
+	profileKeyUID         = "uid"
+	profileKeyLogin       = "login"
+	profileKeyOrgID       = "org_id"
+	profileKeyRole        = "role"
+	profileKeyName        = "name"
+	profileKeyGroup       = "group"
+	profileKeyDescription = "description"
+	profileKeyGlobal      = "global"
+	profileKeyTeamID      = "team_id"
+	profileKeyMemberCount = "member_count"
+	// Comma-joined stable RBAC role names (API `name`) assigned to the team.
+	// Key present (even when empty) means team List already resolved RBAC for
+	// this page — Grants must not re-call the search API.
+	profileKeyAssignedRoleNames = "assigned_role_names"
+	profileKeySAID              = "service_account_id"
+	profileKeyTokens      = "tokens"
+	profileKeyIsExternal  = "is_external"
+	profileKeyIsDisabled  = "is_disabled"
+
+	// Account-creation profile field keys must match AccountCreationSchema so the
+	// submitted values reach CreateAccount.
+	profileFieldEmail    = "email"
+	profileFieldFullName = "full_name"
+)
+
+var userRoles = []string{roleViewer, roleEditor, roleAdmin}
 
 func titleCase(s string) string {
 	titleCaser := cases.Title(language.English)
@@ -28,7 +72,7 @@ func annotationsForUserResourceType() annotations.Annotations {
 // If pagToken.Token is an empty string, the function returns 0.
 // Callers decide what "page 0" means for their endpoint: /api/orgs is 0-based
 // (page 0 is the first page), while /api/users is 1-based and normalizes the
-// first page to 1 — see listSelfHosted in users.go (CXH-2013).
+// first page to 1.
 func parsePageToken(pagToken *pagination.Token, resourceID *v2.ResourceId) (*pagination.Bag, uint64, error) {
 	bag := &pagination.Bag{}
 	err := bag.Unmarshal(pagToken.Token)
@@ -59,4 +103,14 @@ func parsePageToken(pagToken *pagination.Token, resourceID *v2.ResourceId) (*pag
 	}
 
 	return bag, page, nil
+}
+
+func isIRMOrOnCallRole(name string) bool {
+	return strings.HasPrefix(name, irmRolePrefix) || strings.HasPrefix(name, onCallRolePrefix)
+}
+
+// shouldEmitRole mirrors the List filter so team→role grants never target a
+// role resource that List would skip (Hidden or non-IRM/OnCall).
+func shouldEmitRole(role grafana.Role) bool {
+	return !role.Hidden && isIRMOrOnCallRole(role.Name)
 }

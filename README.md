@@ -133,6 +133,12 @@ Show permissions available in Grafana:
 
 - **Users** – Lists all users in Grafana, including their roles.
 - **Organizations** – Details organizations and corresponding access grants.
+- **Teams** – Grafana teams and their members, plus the RBAC roles each team holds.
+- **Roles** *(optional)* – Grafana RBAC roles for the IRM and OnCall plugins (for example
+  Schedules Editor). Requires Grafana Cloud or Enterprise. Role sync is opt-in because
+  the access-control API is absent on OSS; enabling it where RBAC is unavailable fails
+  rather than replacing prior roles with an empty result.
+- **Service accounts** – Grafana service accounts and their organization role.
 
 This information provides insight into user access management in Grafana.
 
@@ -153,6 +159,12 @@ This information provides insight into user access management in Grafana.
 > - **Brand-new users** cannot be created until you either enable [SCIM provisioning](https://grafana.com/docs/grafana/latest/setup-grafana/configure-access/configure-scim-provisioning/) (Grafana's recommended path for automatic user lifecycle in Cloud) or enable the basic login form (`disable_login_form = false`).
 >
 > Managing membership through the grafana.com portal is a separate API and credential (a Grafana Cloud Access Policy token) that the connector's instance service-account token cannot use.
+
+Beyond accounts, `baton-grafana` supports granting and revoking:
+
+- **Organization roles** – Admin / Editor / Viewer on an organization.
+- **Team membership** – add/remove a user on a team (`POST`/`DELETE /api/teams/{id}/members`).
+- **Team RBAC roles** – assign/remove an RBAC role on a team (`POST`/`DELETE /api/access-control/teams/{id}/roles`); Grafana Cloud / Enterprise only.
 
 ---
 

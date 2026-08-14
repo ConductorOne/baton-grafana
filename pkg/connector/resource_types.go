@@ -2,7 +2,10 @@ package connector
 
 import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
+	"github.com/conductorone/baton-sdk/pkg/annotations"
 )
+
+const resourceTypeRoleID = "role"
 
 var (
 	resourceTypeOrg = &v2.ResourceType{
@@ -14,5 +17,23 @@ var (
 		DisplayName: "User",
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_USER},
 		Annotations: annotationsForUserResourceType(),
+	}
+	resourceTypeTeam = &v2.ResourceType{
+		Id:          "team",
+		DisplayName: "Team",
+		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_GROUP},
+		Annotations: annotations.New(&v2.SkipEntitlements{}),
+	}
+	resourceTypeRole = &v2.ResourceType{
+		Id:          resourceTypeRoleID,
+		DisplayName: "Role",
+		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_ROLE},
+		Annotations: annotations.New(&v2.SkipEntitlements{}, &v2.SkipGrants{}, &v2.OptInRequired{}),
+	}
+	resourceTypeServiceAccount = &v2.ResourceType{
+		Id:          "service_account",
+		DisplayName: "Service Account",
+		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_USER},
+		Annotations: annotations.New(&v2.SkipEntitlements{}),
 	}
 )

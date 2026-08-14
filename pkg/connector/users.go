@@ -20,14 +20,6 @@ import (
 	"google.golang.org/grpc/codes"
 )
 
-// Account-creation profile field keys. These MUST match the keys declared in the
-// AccountCreationSchema field map (see connector.go Metadata) so the values the C1
-// UI / CLI collect reach CreateAccount.
-const (
-	profileFieldEmail    = "email"
-	profileFieldFullName = "full_name"
-)
-
 type userBuilder struct {
 	resourceType *v2.ResourceType
 	client       *grafana.Client
@@ -57,11 +49,11 @@ func (u *userBuilder) ResourceType(_ context.Context) *v2.ResourceType {
 // Cloud user and defeated the field's purpose. auth_labels is surfaced separately.
 func userResource(user *grafana.User) (*v2.Resource, error) {
 	hasAuthLabels := len(user.AuthLabels) > 0
-	profile := map[string]interface{}{
-		"full_name": user.Name,
-		"login":     user.Login,
-		"user_id":   user.ID,
-		"email":     user.Email,
+	profile := map[string]any{
+		"full_name":       user.Name,
+		profileKeyLogin:   user.Login,
+		"user_id":         user.ID,
+		profileFieldEmail: user.Email,
 	}
 	// Surface the native flag only when Grafana returned it; a value we don't have
 	// is omitted rather than derived from a different concept (AuthLabels).
@@ -73,36 +65,25 @@ func userResource(user *grafana.User) (*v2.Resource, error) {
 		profile["auth_labels"] = strings.Join(user.AuthLabels, "; ")
 	}
 
-	status := v2.UserTrait_Status_STATUS_ENABLED
+	status := v2.Status_RESOURCE_STATUS_ENABLED
 	if user.IsDisabled {
-		status = v2.UserTrait_Status_STATUS_DISABLED
+		status = v2.Status_RESOURCE_STATUS_DISABLED
 	}
 
-	userTraitOptions := []rs.UserTraitOption{
-		rs.WithUserProfile(profile),
-		rs.WithStatus(status),
-		rs.WithEmail(user.Email, true),
-	}
-
-	resource, err := rs.NewUserResource(
+	return rs.NewUserResource(
 		user.Login,
 		resourceTypeUser,
 		user.ID,
-		userTraitOptions,
+		[]rs.UserTraitOption{
+			rs.WithEmail(user.Email, true),
+		},
+		rs.WithResourceProfile(profile),
+		rs.WithResourceStatus(status, ""),
 	)
-
-	if err != nil {
-		return nil, err
-	}
-
-	return resource, nil
 }
 
-// List fetches all users in Grafana.
-// The parentResourceID parameter (SDK convention) is not used in either mode:
-// in Cloud mode the connector operates on the single org bound to the service account,
-// so no org scoping is needed; in self-hosted mode users are global Grafana entities,
-// not scoped per org.
+// List fetches all users in Grafana. Cloud mode uses the organization bound to
+// the service account; self-hosted users are global, so neither path needs a parent.
 func (u *userBuilder) List(ctx context.Context, _ *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
 	if u.client.IsCloud() {
 		return u.listCloud(ctx)
@@ -140,11 +121,8 @@ func (u *userBuilder) listSelfHosted(ctx context.Context, pToken *pagination.Tok
 		return nil, "", nil, fmt.Errorf("failed to parse page token: %w", err)
 	}
 
-	// Grafana's /api/users endpoint is 1-based: it treats page=0 and page=1 as the
-	// same first page. Starting at page 0 and deriving nextPage as page+1 therefore
-	// fetched the first page twice (page=0, then page=1). Normalize the first page to
-	// 1 so pagination walks 1, 2, 3, … with each page fetched once (CXH-2013).
-	// (This is specific to /api/users; /api/orgs is 0-based — see organizations.go.)
+	// GET /api/users is 1-based and treats page=0 as page=1. Normalize the
+	// initial token so each page is requested exactly once.
 	if page == 0 {
 		page = 1
 	}
@@ -253,7 +231,7 @@ func (u *userBuilder) CreateAccount(
 
 	// Use email as login if not provided
 	login := email
-	if loginVal := accountInfo.Profile.GetFields()["login"]; loginVal != nil && loginVal.GetStringValue() != "" {
+	if loginVal := accountInfo.Profile.GetFields()[profileKeyLogin]; loginVal != nil && loginVal.GetStringValue() != "" {
 		login = loginVal.GetStringValue()
 	}
 	return u.createAccountSelfHosted(ctx, l, accountInfo, email, name, login, credentialOptions)
@@ -283,19 +261,17 @@ func (u *userBuilder) createAccountCloud(
 	if err != nil {
 		// Grafana Cloud disables the basic login form by default, so instance-level
 		// invites for brand-new external users are rejected. Surface an actionable
-		// error: C1 can only add users that already exist in the instance (provisioned
-		// via SSO / SCIM / grafana.com); creating new users requires SCIM provisioning
-		// or enabling the basic login form.
+		// error: the connector can only add users that already exist in the instance;
+		// creating new users requires SCIM or the basic login form.
 		if errors.Is(err, grafana.ErrExternalUserLoginDisabled) {
-			// Terminal, non-retryable: a configuration prerequisite, not a transient
-			// failure. WrapErrors attaches an explicit InvalidArgument gRPC status so
-			// the platform surfaces the prerequisite instead of retrying, while the
-			// errors.Join chain keeps ErrExternalUserLoginDisabled unwrappable.
+			// This configuration prerequisite is terminal, while the wrapped
+			// sentinel remains available to callers.
 			return nil, nil, nil, uhttp.WrapErrors(
 				codes.InvalidArgument,
 				fmt.Sprintf(
 					"grafana-connector: cloud: cannot provision new user %q because the instance's basic login form is disabled (the Grafana Cloud default); "+
-						"C1 can only add users that already exist in this instance (provisioned via SSO/SCIM/grafana.com) — to create new users, enable SCIM provisioning or the basic login form",
+						"the connector can only add users that already exist in this instance (provisioned via SSO/SCIM/grafana.com) — "+
+						"to create new users, enable SCIM provisioning or the basic login form",
 					email),
 				err)
 		}

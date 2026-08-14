@@ -13,8 +13,8 @@ import (
 
 	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
-	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
+	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 )
 
 // newCloudClientForTest creates a grafana.Client in Cloud mode (Bearer auth) pointed at ts.
@@ -66,7 +66,7 @@ func newSelfHostedClientForTest(t *testing.T, ts *httptest.Server) *grafana.Clie
 }
 
 // writeJSON writes data as JSON with the given HTTP status code.
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
+func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(data)
@@ -354,12 +354,7 @@ func TestUserResource_SurfacesExternalSyncOnProfile(t *testing.T) {
 				t.Fatalf("userResource returned unexpected error: %v", err)
 			}
 
-			ut := &v2.UserTrait{}
-			annos := annotations.Annotations(r.Annotations)
-			if ok, err := annos.Pick(ut); err != nil || !ok {
-				t.Fatalf("user resource missing UserTrait (ok=%v, err=%v)", ok, err)
-			}
-			fields := ut.GetProfile().GetFields()
+			fields := rs.GetProfile(r).GetFields()
 			if _, present := fields["is_externally_synced"]; present != tc.wantSyncedPresent {
 				t.Errorf("is_externally_synced present = %v, want %v", present, tc.wantSyncedPresent)
 			}
@@ -375,7 +370,7 @@ func TestUserResource_SurfacesExternalSyncOnProfile(t *testing.T) {
 	}
 }
 
-// TestListSelfHosted_Orgs_SingleOrgSyncs reproduces the CXH-2013 CI regression.
+// TestListSelfHosted_Orgs_SingleOrgSyncs verifies the single-organization path.
 // /api/orgs is 0-based, so the first page must be requested with no explicit page
 // param (page 0). A fresh Grafana has exactly one org (id 1); requesting page=1
 // (as a 1-based scheme would) returns an empty second page, so the org — and its
