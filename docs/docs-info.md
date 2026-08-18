@@ -106,18 +106,18 @@ field group:
    | `--api-token`   | `BATON_API_TOKEN`   | Grafana Cloud | yes (api-key group)                                     |
 
 2. **For each credential:**
-   - _How does a user create or look up the credential?_
+   - *How does a user create or look up the credential?*
      - Self-hosted: use an existing Grafana admin login (username/password).
      - Grafana Cloud: in the instance, go to **Administration → Users and access →
        Service accounts**, create a service account with the **Admin** role, and
        add a service-account token.
-   - _Does it need specific scopes/permissions?_ Grafana uses a role model, not
+   - *Does it need specific scopes/permissions?* Grafana uses a role model, not
      OAuth scopes. The credential must have **Admin** on the organization(s) being
      synced/provisioned so it can read users/orgs and manage org membership.
-   - _Different scopes to sync vs provision?_ No separate scope — the same Admin
+   - *Different scopes to sync vs provision?* No separate scope — the same Admin
      role covers read (sync) and write (provisioning). Account creation in Cloud
      additionally depends on the instance login-form configuration (see notes).
-   - _What access is needed to CREATE the credential?_ Org Admin (to create a
+   - *What access is needed to CREATE the credential?* Org Admin (to create a
      service-account token) or server admin (self-hosted).
 
 ## Resource reference (API doc links)
