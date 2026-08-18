@@ -55,6 +55,9 @@ func TestTeamListAndMemberGrants(t *testing.T) {
 	if len(resources) != 1 || resources[0].Id.Resource != "7" {
 		t.Fatalf("unexpected resources: %+v", resources)
 	}
+	if orgID, ok := rs.GetProfileStringValue(resources[0].GetProfile(), profileKeyOrgID); !ok || orgID != "1" {
+		t.Fatalf("team org_id must be a string profile value, got ok=%v value=%q", ok, orgID)
+	}
 
 	grants, _, _, err := builder.Grants(context.Background(), resources[0], &pagination.Token{})
 	if err != nil {

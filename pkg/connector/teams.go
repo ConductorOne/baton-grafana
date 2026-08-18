@@ -33,7 +33,7 @@ func teamResource(team grafana.Team) (*v2.Resource, error) {
 	profile := map[string]any{
 		profileKeyTeamID:      team.ID,
 		profileKeyUID:         team.UID,
-		profileKeyOrgID:       team.OrgID,
+		profileKeyOrgID:       strconv.Itoa(team.OrgID),
 		profileFieldEmail:     team.Email,
 		profileKeyMemberCount: team.MemberCount,
 	}
