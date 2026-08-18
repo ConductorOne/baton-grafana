@@ -22,12 +22,10 @@ field group:
    - Organizations — Grafana organizations and their role grants (Admin, Editor,
      Viewer). Synced by default.
    - Teams — Grafana teams (`GET /api/teams/search`) and their members
-     (`GET /api/teams/{id}/members`). Team→RBAC role grants are resolved with one
-     batched `POST /api/access-control/teams/roles/search` per team List page;
-     filtered role names are stored on the team profile for Grants (Grant/Revoke
-     still use the per-team GET for live pre-reads). Synced by default — the
-     teams API exists on every Grafana edition with the same Admin credential
-     already required for users/orgs.
+     (`GET /api/teams/{id}/members`). Synced by default — the teams API exists on
+     every Grafana edition with the same Admin credential already required for
+     users/orgs. Team membership grants are emitted from the team builder; team→
+     RBAC role assignments are **not** emitted here (see Roles below).
    - Roles — Grafana RBAC roles from `GET /api/access-control/roles`, filtered to
      the IRM (`plugins:grafana-irm-app:`) and OnCall (`plugins:grafana-oncall-app:`)
      plugin roles (for example `plugins:grafana-irm-app:schedules-editor`,
@@ -41,10 +39,13 @@ field group:
      availability probe and no cached state. A missing team is not a 404 (both
      the per-team GET and the search POST answer 200 with an empty body), so the
      404 unambiguously means the API is absent. When the role type is scheduled
-     and RBAC is absent, List fails closed. When teams sync and RBAC is absent,
-     team→role grants soft-skip and the membership grants still sync; every other
-     failure (permissions, 5xx) fails closed. Operators enable roles in the C1 UI
-     when they have Cloud/Enterprise.
+     and RBAC is absent, List fails closed. Team→role grants are emitted by
+     `roleBuilder.GrantsForResourceType` (`TypeScopedGrants`): the SDK schedules
+     that op only when the role type is in the sync, it paginates teams and
+     batches `POST /api/access-control/teams/roles/search` per page, and it fails
+     closed on every RBAC error (an empty successful emission would wipe prior
+     assignments). Team membership still syncs independently when roles are off.
+     Operators enable roles in the C1 UI when they have Cloud/Enterprise.
    - Service accounts — `GET /api/serviceaccounts/search`. Service accounts do not
      appear in `GET /api/org/users`, so they are a separate resource; their
      organization role (Viewer/Editor/Admin) is emitted as an **immutable** org

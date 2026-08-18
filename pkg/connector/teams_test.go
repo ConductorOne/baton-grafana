@@ -860,6 +860,98 @@ func TestRoleGrantsForResourceTypeEmitsTeamRoleGrants(t *testing.T) {
 	}
 }
 
+// GrantsForResourceType must page the same way team List does: a full page of
+// ResourcesPageSize yields a next token; a short page ends the loop. A silent
+// NextPageToken="" after page 1 would drop every team→role grant past the first
+// 50 teams.
+func TestRoleGrantsForResourceTypePagination(t *testing.T) {
+	pageSize := int(ResourcesPageSize)
+	var pages []string
+	var searchCalls int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/teams/search":
+			page := r.URL.Query().Get("page")
+			pages = append(pages, page)
+			n := pageSize
+			id := 1
+			pageNum := 1
+			if page == "2" {
+				n = 1
+				id = 2
+				pageNum = 2
+			}
+			items := make([]map[string]any, 0, n)
+			for i := 0; i < n; i++ {
+				itemID := id
+				if page != "2" && i > 0 {
+					itemID = 1000 + i
+				}
+				items = append(items, map[string]any{
+					"id": itemID, "uid": "team-" + strconv.Itoa(itemID), "orgId": 1, "name": "Ops",
+				})
+			}
+			writeJSON(w, http.StatusOK, map[string]any{
+				"page": pageNum, "perPage": pageSize, "teams": items,
+			})
+		case r.Method == http.MethodPost && r.URL.Path == "/api/access-control/teams/roles/search":
+			searchCalls++
+			var req struct {
+				TeamIDs []int `json:"teamIds"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Errorf("decode search body: %v", err)
+				http.Error(w, "bad request", http.StatusBadRequest)
+				return
+			}
+			out := map[string]any{}
+			for _, id := range req.TeamIDs {
+				key := strconv.Itoa(id)
+				// One IRM role on team 1 (page 1) and team 2 (page 2) so both
+				// pages contribute a grant we can count.
+				if id == 1 || id == 2 {
+					out[key] = []map[string]any{
+						{"uid": "r" + key, "name": "plugins:grafana-irm-app:schedules-editor", "displayName": "Schedules Editor"},
+					}
+				} else {
+					out[key] = []map[string]any{}
+				}
+			}
+			writeJSON(w, http.StatusOK, out)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	builder := newRoleBuilder(newCloudClientForTest(t, ts))
+	opts := rs.SyncOpAttrs{}
+	var principals []string
+	for {
+		grants, res, err := builder.GrantsForResourceType(context.Background(), resourceTypeRole.Id, opts)
+		if err != nil {
+			t.Fatalf("GrantsForResourceType: %v", err)
+		}
+		for _, g := range grants {
+			principals = append(principals, g.Principal.Id.Resource)
+		}
+		if res == nil || res.NextPageToken == "" {
+			break
+		}
+		opts.PageToken = pagination.Token{Token: res.NextPageToken}
+	}
+
+	if strings.Join(pages, ",") != "1,2" {
+		t.Fatalf("team pages=%v want 1,2", pages)
+	}
+	if searchCalls != 2 {
+		t.Fatalf("expected one RBAC search per team page, got %d", searchCalls)
+	}
+	if len(principals) != 2 || principals[0] != "1" || principals[1] != "2" {
+		t.Fatalf("principals=%v want [1 2]", principals)
+	}
+}
+
 // The role type is OptIn-off by default, so the SDK never schedules the
 // type-scoped grants op — team membership must still sync on every edition with
 // no dependency on the access-control API.
