@@ -237,8 +237,8 @@ func TestListSelfHosted_OmitsExternalSyncFromRawJSON(t *testing.T) {
 // Pagination must therefore request pages 1, 2, 3, … exactly once.
 func TestListSelfHosted_PaginationNoDoubleFetch(t *testing.T) {
 	const (
-		perPage    = int(ResourcesPageSize) // 50
-		totalUsers = 109                    // 50 + 50 + 9 → three pages
+		perPage    = int(ResourcesPageSize)
+		totalUsers = perPage*2 + 9
 	)
 
 	var requestedPages []string

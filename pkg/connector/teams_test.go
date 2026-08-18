@@ -25,7 +25,7 @@ func TestTeamListAndMemberGrants(t *testing.T) {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"totalCount": 1,
 				"page":       1,
-				"perPage":    50,
+				"perPage":    ResourcesPageSize,
 				"teams": []map[string]any{
 					{"id": 7, "uid": "teamuid", "orgId": 1, "name": "OnCall", "email": "", "memberCount": 1},
 				},
@@ -583,7 +583,7 @@ func TestServiceAccountListAndOrgGrant(t *testing.T) {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"totalCount": 1,
 				"page":       1,
-				"perPage":    50,
+				"perPage":    ResourcesPageSize,
 				"serviceAccounts": []map[string]any{
 					{
 						"id": 20, "uid": "sa-uid", "name": "baton-test", "login": "sa-1-baton-test",
@@ -783,7 +783,7 @@ func TestRoleGrantsForResourceTypeEmitsTeamRoleGrants(t *testing.T) {
 			writeJSON(w, http.StatusOK, map[string]any{
 				"totalCount": 2,
 				"page":       1,
-				"perPage":    50,
+				"perPage":    ResourcesPageSize,
 				"teams": []map[string]any{
 					{"id": 7, "uid": "t7", "orgId": 1, "name": "A", "memberCount": 0},
 					{"id": 8, "uid": "t8", "orgId": 1, "name": "B", "memberCount": 0},
@@ -863,7 +863,7 @@ func TestRoleGrantsForResourceTypeEmitsTeamRoleGrants(t *testing.T) {
 // GrantsForResourceType must page the same way team List does: a full page of
 // ResourcesPageSize yields a next token; a short page ends the loop. A silent
 // NextPageToken="" after page 1 would drop every team→role grant past the first
-// 50 teams.
+// page of teams.
 func TestRoleGrantsForResourceTypePagination(t *testing.T) {
 	pageSize := int(ResourcesPageSize)
 	var pages []string

@@ -14,7 +14,7 @@ import (
 )
 
 const (
-	ResourcesPageSize uint64 = 50
+	ResourcesPageSize uint64 = 1000
 
 	// Org role entitlement slugs (also used as Grafana role strings).
 	roleViewer = "Viewer"

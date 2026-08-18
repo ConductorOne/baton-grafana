@@ -416,8 +416,8 @@ func TestListSelfHosted_Orgs_SingleOrgSyncs(t *testing.T) {
 // each exactly once, with no duplicate resources.
 func TestListSelfHosted_Orgs_PaginationZeroBased(t *testing.T) {
 	const (
-		perPage  = int(ResourcesPageSize) // 50
-		totalOrg = 109                    // pages 0, 1, 2 → 50 + 50 + 9
+		perPage  = int(ResourcesPageSize)
+		totalOrg = perPage*2 + 9
 	)
 
 	var requestedPages []string
