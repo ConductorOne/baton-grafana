@@ -11,6 +11,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/uhttp"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 // NewClient initializes a new Grafana API client.
@@ -466,7 +468,7 @@ func (c *Client) AddUserToTeam(ctx context.Context, teamID, userID int) error {
 
 	err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(TeamMembersPath, teamID), nil, req, nil)
 	if err != nil {
-		if strings.Contains(err.Error(), fmt.Sprintf("%d", http.StatusBadRequest)) &&
+		if status.Code(err) == codes.InvalidArgument &&
 			strings.Contains(strings.ToLower(err.Error()), "already added to this team") {
 			return fmt.Errorf("%w: %w", ErrTeamMemberAlreadyExists, err)
 		}
@@ -482,7 +484,7 @@ func (c *Client) AddUserToTeam(ctx context.Context, teamID, userID int) error {
 func (c *Client) RemoveUserFromTeam(ctx context.Context, teamID, userID int) error {
 	err := c.doRequest(ctx, http.MethodDelete, c.buildResourceURL(TeamMemberByUserPath, teamID, userID), nil, nil, nil)
 	if err != nil {
-		if strings.Contains(err.Error(), fmt.Sprintf("%d", http.StatusNotFound)) &&
+		if status.Code(err) == codes.NotFound &&
 			strings.Contains(err.Error(), "Team member not found") {
 			return fmt.Errorf("%w: %w", ErrTeamMemberNotFound, err)
 		}
@@ -587,7 +589,7 @@ func (c *Client) AssignRoleToTeam(ctx context.Context, teamID int, roleUID strin
 func (c *Client) RemoveRoleFromTeam(ctx context.Context, teamID int, roleUID string) error {
 	err := c.doRequest(ctx, http.MethodDelete, c.buildResourceURL(TeamRoleByUIDPath, teamID, roleUID), nil, nil, nil)
 	if err != nil {
-		if strings.Contains(err.Error(), fmt.Sprintf("%d", http.StatusNotFound)) &&
+		if status.Code(err) == codes.NotFound &&
 			strings.Contains(err.Error(), "Team role not found") {
 			return fmt.Errorf("%w: %w", ErrTeamRoleNotFound, err)
 		}

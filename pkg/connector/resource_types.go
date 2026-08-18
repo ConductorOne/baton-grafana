@@ -5,8 +5,6 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 )
 
-const resourceTypeRoleID = "role"
-
 var (
 	resourceTypeOrg = &v2.ResourceType{
 		Id:          "org",
@@ -25,7 +23,7 @@ var (
 		Annotations: annotations.New(&v2.SkipEntitlements{}),
 	}
 	resourceTypeRole = &v2.ResourceType{
-		Id:          resourceTypeRoleID,
+		Id:          "role",
 		DisplayName: "Role",
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_ROLE},
 		// TypeScopedGrants: team→role assignments are emitted once per sync by

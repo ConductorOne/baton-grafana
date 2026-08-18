@@ -45,8 +45,9 @@ const (
 	profileKeyIsExternal  = "is_external"
 	profileKeyIsDisabled  = "is_disabled"
 
-	// Account-creation profile field keys must match AccountCreationSchema so the
-	// submitted values reach CreateAccount.
+	// Shared profile keys. CreateAccount schema fields must use the same strings
+	// so submitted values reach CreateAccount; resource profiles (users, teams)
+	// reuse email for the API email field.
 	profileFieldEmail    = "email"
 	profileFieldFullName = "full_name"
 )
