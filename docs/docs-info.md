@@ -22,8 +22,12 @@ field group:
    - Organizations — Grafana organizations and their role grants (Admin, Editor,
      Viewer). Synced by default.
    - Teams — Grafana teams (`GET /api/teams/search`) and their members
-     (`GET /api/teams/{id}/members`). Synced by default — the teams API exists on
-     every Grafana edition with the same Admin credential already required for
+     (`GET /api/teams/{id}/members`). Both endpoints are scoped to the credential's
+     **current organization** (self-hosted and Cloud) — unlike self-hosted
+     `/api/users` / `/api/orgs`, which are server-admin global. On a multi-org
+     self-hosted instance, teams outside the admin's current org are not synced
+     and must not be read as deletions. Synced by default — the teams API exists
+     on every Grafana edition with the same Admin credential already required for
      users/orgs. Team membership grants are emitted from the team builder; team→
      RBAC role assignments are **not** emitted here (see Roles below).
    - Roles — Grafana RBAC roles from `GET /api/access-control/roles`, filtered to
@@ -42,15 +46,17 @@ field group:
      and RBAC is absent, List fails closed. Team→role grants are emitted by
      `roleBuilder.GrantsForResourceType` (`TypeScopedGrants`): the SDK schedules
      that op only when the role type is in the sync, it paginates teams and
-     batches `POST /api/access-control/teams/roles/search` per page, and it fails
-     closed on every RBAC error (an empty successful emission would wipe prior
-     assignments). Team membership still syncs independently when roles are off.
-     Operators enable roles in the C1 UI when they have Cloud/Enterprise.
-   - Service accounts — `GET /api/serviceaccounts/search`. Service accounts do not
-     appear in `GET /api/org/users`, so they are a separate resource; their
-     organization role (Viewer/Editor/Admin) is emitted as an **immutable** org
-     grant (sync-only — org Grant/Revoke accept users only). Synced by default
-     (same Admin credential covers this endpoint).
+     batches `POST /api/access-control/teams/roles/search` per page (same
+     current-org team scope as Teams above), and it fails closed on every RBAC
+     error (an empty successful emission would wipe prior assignments). Team
+     membership still syncs independently when roles are off. Operators enable
+     roles in the C1 UI when they have Cloud/Enterprise.
+   - Service accounts — `GET /api/serviceaccounts/search`, also scoped to the
+     credential's **current organization** (same caveat as Teams on multi-org
+     self-hosted). Service accounts do not appear in `GET /api/org/users`, so they
+     are a separate resource; their organization role (Viewer/Editor/Admin) is
+     emitted as an **immutable** org grant (sync-only — org Grant/Revoke accept
+     users only). Synced by default (same Admin credential covers this endpoint).
 
 2. **Can the connector provision any resources? If so, which ones?**
    - **Accounts (Users)** — `CreateAccount` and `Delete`.
