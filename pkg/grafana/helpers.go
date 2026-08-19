@@ -91,7 +91,7 @@ func normalizeOneBasedPage(pVars *PaginationVars) {
 // Callers pass their own page convention (1-based users/teams or 0-based orgs);
 // this helper only advances the numeric token.
 func nextPageToken(pVars *PaginationVars, pageLen uint64) string {
-	if pVars != nil && pageLen == pVars.Size {
+	if pVars != nil && pVars.Size > 0 && pageLen == pVars.Size {
 		return strconv.FormatUint(pVars.Page+1, 10)
 	}
 	return ""

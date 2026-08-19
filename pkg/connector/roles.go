@@ -142,7 +142,11 @@ func (r *roleBuilder) GrantsForResourceType(ctx context.Context, _ string, opts 
 		}
 
 		rolesByTeam, roleAnnos, err := r.client.ListRolesForTeams(ctx, teamIDs)
-		annos = append(annos, roleAnnos...)
+		// Update (don't append) so a single RateLimitDescription survives Pick.
+		var roleRL v2.RateLimitDescription
+		if ok, pickErr := roleAnnos.Pick(&roleRL); pickErr == nil && ok {
+			annos.WithRateLimiting(&roleRL)
+		}
 		if err != nil {
 			// This method only runs when the role type is opted in, so RBAC must
 			// be reachable. A route-absent 404 (or any error) here is not "roles
