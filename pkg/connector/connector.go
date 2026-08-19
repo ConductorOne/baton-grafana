@@ -15,8 +15,7 @@ import (
 
 // Grafana represents the Baton connector for Grafana.
 type Grafana struct {
-	client   *grafana.Client
-	syncOrgs bool
+	client *grafana.Client
 }
 
 // ResourceSyncers returns a list of syncers for different resource types.
@@ -26,7 +25,7 @@ func (g *Grafana) ResourceSyncers(ctx context.Context) []connectorbuilder.Resour
 		newUserBuilder(g.client),
 		newTeamBuilder(g.client),
 		newRoleBuilder(g.client),
-		newServiceAccountBuilder(g.client, g.syncOrgs),
+		newServiceAccountBuilder(g.client),
 	}
 }
 
@@ -115,8 +114,7 @@ func (g *Grafana) Validate(ctx context.Context) (annotations.Annotations, error)
 // New initializes a new instance of the Grafana connector.
 // When apiToken is non-empty the connector operates in Cloud mode (Bearer auth, current-org scope).
 // When apiToken is empty the connector operates in self-hosted mode (Basic auth, server-admin scope).
-// syncOrgs controls whether service-account Grants emit cross-type org-role grants.
-func New(ctx context.Context, hostname, username, password, apiToken string, syncOrgs bool) (*Grafana, error) {
+func New(ctx context.Context, hostname, username, password, apiToken string) (*Grafana, error) {
 	grafanaClient, err := grafana.NewClient(ctx, hostname, username, password, apiToken)
 	if err != nil {
 		l := ctxzap.Extract(ctx)
@@ -125,7 +123,6 @@ func New(ctx context.Context, hostname, username, password, apiToken string, syn
 	}
 
 	return &Grafana{
-		client:   grafanaClient,
-		syncOrgs: syncOrgs,
+		client: grafanaClient,
 	}, nil
 }

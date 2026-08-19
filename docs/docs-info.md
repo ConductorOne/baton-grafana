@@ -56,8 +56,7 @@ field group:
      credential's **current organization** (same caveat as Teams on multi-org
      self-hosted). Service accounts do not appear in `GET /api/org/users`, so they
      are a separate resource; their organization role (Viewer/Editor/Admin) is
-     emitted as an **immutable** org grant only when the org type is in the sync
-     (Engine cross-resource filter). Synced by default (same Admin credential
+     emitted as an **immutable** org grant. Synced by default (same Admin credential
      covers this endpoint).
 
 2. **Can the connector provision any resources? If so, which ones?**

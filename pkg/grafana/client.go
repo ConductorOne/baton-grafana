@@ -88,19 +88,14 @@ func (c *Client) buildResourceURL(pathTemplate string, args ...any) *url.URL {
 // ListOrganizations returns organizations for the current user (paginated, 0-based).
 func (c *Client) ListOrganizations(ctx context.Context, pVars *PaginationVars) ([]*Organization, string, annotations.Annotations, error) {
 	var organizationsResponse []*Organization
-	var rlDesc v2.RateLimitDescription
-	annos := annotations.Annotations{}
-
-	err := c.doRequest(
+	annos, err := c.doRequest(
 		ctx,
 		http.MethodGet,
 		c.buildResourceURL(ListOrgsPath),
 		&organizationsResponse,
 		nil,
 		pVars,
-		uhttp.WithRatelimitData(&rlDesc),
 	)
-	annos.WithRateLimiting(&rlDesc)
 	if err != nil {
 		return nil, "", annos, err
 	}
@@ -111,19 +106,14 @@ func (c *Client) ListOrganizations(ctx context.Context, pVars *PaginationVars) (
 // ListOrgsForUser fetches all organizations for a given Grafana user.
 func (c *Client) ListOrgsForUser(ctx context.Context, userID int) ([]*UserByOrgResponse, annotations.Annotations, error) {
 	var orgsResponse []*UserByOrgResponse
-	var rlDesc v2.RateLimitDescription
-	annos := annotations.Annotations{}
-
-	err := c.doRequest(
+	annos, err := c.doRequest(
 		ctx,
 		http.MethodGet,
 		c.buildResourceURL(OrgsForUserPath, userID),
 		&orgsResponse,
 		nil,
 		nil,
-		uhttp.WithRatelimitData(&rlDesc),
 	)
-	annos.WithRateLimiting(&rlDesc)
 	if err != nil {
 		return nil, annos, err
 	}
@@ -134,20 +124,15 @@ func (c *Client) ListOrgsForUser(ctx context.Context, userID int) ([]*UserByOrgR
 // ListUsersByOrg fetches all users in a given Grafana organization.
 func (c *Client) ListUsersByOrg(ctx context.Context, orgID string) ([]*UserByOrgResponse, annotations.Annotations, error) {
 	var usersByOrgResponse []*UserByOrgResponse
-	var rlDesc v2.RateLimitDescription
-	annos := annotations.Annotations{}
 
-	// Make the request without pagination as the endpoint does not support it
-	err := c.doRequest(
+	annos, err := c.doRequest(
 		ctx,
 		http.MethodGet,
 		c.buildResourceURL(ListUsersInOrgPath, orgID),
 		&usersByOrgResponse,
 		nil,
 		nil,
-		uhttp.WithRatelimitData(&rlDesc),
 	)
-	annos.WithRateLimiting(&rlDesc)
 	if err != nil {
 		return nil, annos, err
 	}
@@ -159,19 +144,14 @@ func (c *Client) ListUsersByOrg(ctx context.Context, orgID string) ([]*UserByOrg
 func (c *Client) ListUsers(ctx context.Context, pVars *PaginationVars) ([]*User, string, annotations.Annotations, error) {
 	normalizeOneBasedPage(pVars)
 	var usersResponse []*User
-	var rlDesc v2.RateLimitDescription
-	annos := annotations.Annotations{}
-
-	err := c.doRequest(
+	annos, err := c.doRequest(
 		ctx,
 		http.MethodGet,
 		c.buildResourceURL(ListUsersPath),
 		&usersResponse,
 		nil,
 		pVars,
-		uhttp.WithRatelimitData(&rlDesc),
 	)
-	annos.WithRateLimiting(&rlDesc)
 	if err != nil {
 		return nil, "", annos, err
 	}
@@ -179,9 +159,8 @@ func (c *Client) ListUsers(ctx context.Context, pVars *PaginationVars) ([]*User,
 	return usersResponse, nextPageToken(pVars, uint64(len(usersResponse))), annos, nil
 }
 
-// doRequest handles HTTP requests with authentication and optional pagination.
-// Callers that need extra response handling, such as rate-limit header capture
-// with uhttp.WithRatelimitData, pass it through doOpts.
+// doRequest is the only HTTP call site. It always captures rate-limit headers
+// so callers cannot miss them. Extra DoOptions (if any) are applied after that.
 func (c *Client) doRequest(
 	ctx context.Context,
 	method string,
@@ -190,8 +169,10 @@ func (c *Client) doRequest(
 	data any,
 	paginationVars *PaginationVars,
 	doOpts ...uhttp.DoOption,
-) error {
+) (annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
+	annos := annotations.Annotations{}
+	var rlDesc v2.RateLimitDescription
 
 	reqOptions := []uhttp.RequestOption{
 		uhttp.WithContentType("application/json"),
@@ -218,34 +199,33 @@ func (c *Client) doRequest(
 
 	req, err := c.httpClient.NewRequest(ctx, method, urlAddress, reqOptions...)
 	if err != nil {
-		return err
+		return annos, err
 	}
 
-	doOptions := make([]uhttp.DoOption, 0, len(doOpts)+2)
+	doOptions := make([]uhttp.DoOption, 0, len(doOpts)+3)
+	doOptions = append(doOptions, uhttp.WithRatelimitData(&rlDesc))
 	doOptions = append(doOptions, doOpts...)
 	if response != nil {
 		doOptions = append(doOptions, uhttp.WithJSONResponse(response))
 	}
 
-	// Add error response handling
 	var grafanaError GrafanaError
 	doOptions = append(doOptions, uhttp.WithErrorResponse(&grafanaError))
 
 	resp, err := c.httpClient.Do(req, doOptions...)
+	annos.WithRateLimiting(&rlDesc)
 	if err != nil {
-		// Add context logging to HTTP errors
 		if l != nil {
 			l.Debug("Grafana API error response",
 				zap.String("url", urlAddress.String()),
 				zap.String("method", method),
 				zap.Error(err))
 		}
-		return err
+		return annos, err
 	}
 
 	defer resp.Body.Close()
 
-	// Log the response status for debugging
 	if l != nil && (resp.StatusCode < 200 || resp.StatusCode >= 300) {
 		l.Debug("Grafana API non-success response",
 			zap.String("url", urlAddress.String()),
@@ -253,14 +233,14 @@ func (c *Client) doRequest(
 			zap.Int("status", resp.StatusCode))
 	}
 
-	return nil
+	return annos, nil
 }
 
 // GetUserByID fetches a user by their ID.
 func (c *Client) GetUserByID(ctx context.Context, userID int) (*User, error) {
 	var user User
 
-	err := c.doRequest(
+	_, err := c.doRequest(
 		ctx,
 		http.MethodGet,
 		c.buildResourceURL(GetUserByIDPath, userID),
@@ -305,7 +285,7 @@ func (c *Client) GetUserByLoginOrEmail(ctx context.Context, loginOrEmail string)
 func (c *Client) CreateUser(ctx context.Context, req *CreateUserRequest) (*User, error) {
 	var user User
 
-	err := c.doRequest(
+	_, err := c.doRequest(
 		ctx,
 		http.MethodPost,
 		c.buildResourceURL(CreateUserPath),
@@ -325,7 +305,7 @@ func (c *Client) CreateUser(ctx context.Context, req *CreateUserRequest) (*User,
 }
 
 func (c *Client) DeleteUser(ctx context.Context, userId string) error {
-	err := c.doRequest(
+	_, err := c.doRequest(
 		ctx,
 		http.MethodDelete,
 		c.buildResourceURL(DeleteUserPath, userId),
@@ -345,7 +325,7 @@ func (c *Client) DeleteUser(ctx context.Context, userId string) error {
 func (c *Client) GetCurrentOrg(ctx context.Context) (*Organization, error) {
 	var org Organization
 
-	err := c.doRequest(ctx, http.MethodGet, c.buildResourceURL(GetCurrentOrgPath), &org, nil, nil)
+	_, err := c.doRequest(ctx, http.MethodGet, c.buildResourceURL(GetCurrentOrgPath), &org, nil, nil)
 	if err != nil {
 		return nil, fmt.Errorf("grafana-client: get current org: %w", err)
 	}
@@ -357,19 +337,14 @@ func (c *Client) GetCurrentOrg(ctx context.Context) (*Organization, error) {
 // No pagination — the endpoint returns the full list in one response.
 func (c *Client) ListCurrentOrgUsers(ctx context.Context) ([]*UserByOrgResponse, annotations.Annotations, error) {
 	var users []*UserByOrgResponse
-	var rlDesc v2.RateLimitDescription
-	annos := annotations.Annotations{}
-
-	err := c.doRequest(
+	annos, err := c.doRequest(
 		ctx,
 		http.MethodGet,
 		c.buildResourceURL(CurrentOrgUsersPath),
 		&users,
 		nil,
 		nil,
-		uhttp.WithRatelimitData(&rlDesc),
 	)
-	annos.WithRateLimiting(&rlDesc)
 	if err != nil {
 		return nil, annos, fmt.Errorf("grafana-client: list current org users: %w", err)
 	}
@@ -382,7 +357,7 @@ func (c *Client) ListCurrentOrgUsers(ctx context.Context) ([]*UserByOrgResponse,
 func (c *Client) UpdateOrgUserRole(ctx context.Context, userID int, role string) error {
 	req := &UpdateOrgUserRoleRequest{Role: role}
 
-	err := c.doRequest(ctx, http.MethodPatch, c.buildResourceURL(UpdateCurrentOrgUserPath, userID), nil, req, nil)
+	_, err := c.doRequest(ctx, http.MethodPatch, c.buildResourceURL(UpdateCurrentOrgUserPath, userID), nil, req, nil)
 	if err != nil {
 		return fmt.Errorf("grafana-client: update org user role: %w", err)
 	}
@@ -393,7 +368,7 @@ func (c *Client) UpdateOrgUserRole(ctx context.Context, userID int, role string)
 // AddUserToCurrentOrg adds an existing user (by login or email) to the current org.
 // Reuses AddUserToOrgRequest — same request shape as the self-hosted endpoint.
 func (c *Client) AddUserToCurrentOrg(ctx context.Context, req *AddUserToOrgRequest) error {
-	err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(CurrentOrgUsersPath), nil, req, nil)
+	_, err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(CurrentOrgUsersPath), nil, req, nil)
 	if err != nil {
 		return fmt.Errorf("grafana-client: add user to current org: %w", err)
 	}
@@ -403,7 +378,7 @@ func (c *Client) AddUserToCurrentOrg(ctx context.Context, req *AddUserToOrgReque
 
 // RemoveCurrentOrgUser removes a user from the current organization by user ID.
 func (c *Client) RemoveCurrentOrgUser(ctx context.Context, userID int) error {
-	err := c.doRequest(ctx, http.MethodDelete, c.buildResourceURL(UpdateCurrentOrgUserPath, userID), nil, nil, nil)
+	_, err := c.doRequest(ctx, http.MethodDelete, c.buildResourceURL(UpdateCurrentOrgUserPath, userID), nil, nil, nil)
 	if err != nil {
 		return fmt.Errorf("grafana-client: remove current org user: %w", err)
 	}
@@ -416,7 +391,7 @@ func (c *Client) RemoveCurrentOrgUser(ctx context.Context, userID int) error {
 func (c *Client) InviteUserToOrg(ctx context.Context, req *InviteUserRequest) (*InviteUserResponse, error) {
 	var resp InviteUserResponse
 
-	err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(InviteUserPath), &resp, req, nil)
+	_, err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(InviteUserPath), &resp, req, nil)
 	if err != nil {
 		// Grafana rejects invites for brand-new external users when the basic
 		// login form is disabled (the Grafana Cloud default). Gate on the 400
@@ -435,7 +410,7 @@ func (c *Client) InviteUserToOrg(ctx context.Context, req *InviteUserRequest) (*
 
 // AddUserToOrg adds a user to an organization with a specified role.
 func (c *Client) AddUserToOrg(ctx context.Context, orgID string, req *AddUserToOrgRequest) error {
-	err := c.doRequest(
+	_, err := c.doRequest(
 		ctx,
 		http.MethodPost,
 		c.buildResourceURL(AddUserToOrgPath, orgID),
@@ -452,7 +427,7 @@ func (c *Client) AddUserToOrg(ctx context.Context, orgID string, req *AddUserToO
 
 // RemoveUserFromOrg removes a user from an organization.
 func (c *Client) RemoveUserFromOrg(ctx context.Context, orgID string, userID int) error {
-	err := c.doRequest(
+	_, err := c.doRequest(
 		ctx,
 		http.MethodDelete,
 		c.buildResourceURL(RemoveUserFromOrgPath, orgID, userID),
@@ -472,19 +447,14 @@ func (c *Client) RemoveUserFromOrg(ctx context.Context, orgID string, userID int
 func (c *Client) ListTeams(ctx context.Context, pVars *PaginationVars) ([]*Team, string, annotations.Annotations, error) {
 	normalizeOneBasedPage(pVars)
 	var resp TeamSearchResponse
-	var rlDesc v2.RateLimitDescription
-	annos := annotations.Annotations{}
-
-	err := c.doRequest(
+	annos, err := c.doRequest(
 		ctx,
 		http.MethodGet,
 		c.buildResourceURL(SearchTeamsPath),
 		&resp,
 		nil,
 		pVars,
-		uhttp.WithRatelimitData(&rlDesc),
 	)
-	annos.WithRateLimiting(&rlDesc)
 	if err != nil {
 		return nil, "", annos, fmt.Errorf("grafana-client: list teams: %w", err)
 	}
@@ -495,19 +465,14 @@ func (c *Client) ListTeams(ctx context.Context, pVars *PaginationVars) ([]*Team,
 // ListTeamMembers calls GET /api/teams/{id}/members (not paginated).
 func (c *Client) ListTeamMembers(ctx context.Context, teamID int) ([]*TeamMember, annotations.Annotations, error) {
 	var members []*TeamMember
-	var rlDesc v2.RateLimitDescription
-	annos := annotations.Annotations{}
-
-	err := c.doRequest(
+	annos, err := c.doRequest(
 		ctx,
 		http.MethodGet,
 		c.buildResourceURL(TeamMembersPath, teamID),
 		&members,
 		nil,
 		nil,
-		uhttp.WithRatelimitData(&rlDesc),
 	)
-	annos.WithRateLimiting(&rlDesc)
 	if err != nil {
 		return nil, annos, fmt.Errorf("grafana-client: list team members: %w", err)
 	}
@@ -520,7 +485,7 @@ func (c *Client) ListTeamMembers(ctx context.Context, teamID int) ([]*TeamMember
 func (c *Client) AddUserToTeam(ctx context.Context, teamID, userID int) error {
 	req := &AddUserToTeamRequest{UserID: userID}
 
-	err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(TeamMembersPath, teamID), nil, req, nil)
+	_, err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(TeamMembersPath, teamID), nil, req, nil)
 	if err != nil {
 		if status.Code(err) == codes.InvalidArgument &&
 			strings.Contains(strings.ToLower(err.Error()), "already added to this team") {
@@ -536,7 +501,7 @@ func (c *Client) AddUserToTeam(ctx context.Context, teamID, userID int) error {
 // HTTP 404 with "Team member not found" maps to ErrTeamMemberNotFound.
 // Other 404 bodies (for example, "Team not found") remain errors.
 func (c *Client) RemoveUserFromTeam(ctx context.Context, teamID, userID int) error {
-	err := c.doRequest(ctx, http.MethodDelete, c.buildResourceURL(TeamMemberByUserPath, teamID, userID), nil, nil, nil)
+	_, err := c.doRequest(ctx, http.MethodDelete, c.buildResourceURL(TeamMemberByUserPath, teamID, userID), nil, nil, nil)
 	if err != nil {
 		if status.Code(err) == codes.NotFound &&
 			strings.Contains(err.Error(), "Team member not found") {
@@ -553,19 +518,14 @@ func (c *Client) RemoveUserFromTeam(ctx context.Context, teamID, userID int) err
 func (c *Client) ListServiceAccounts(ctx context.Context, pVars *PaginationVars) ([]*ServiceAccount, string, annotations.Annotations, error) {
 	normalizeOneBasedPage(pVars)
 	var resp ServiceAccountSearchResponse
-	var rlDesc v2.RateLimitDescription
-	annos := annotations.Annotations{}
-
-	err := c.doRequest(
+	annos, err := c.doRequest(
 		ctx,
 		http.MethodGet,
 		c.buildResourceURL(SearchServiceAccountsPath),
 		&resp,
 		nil,
 		pVars,
-		uhttp.WithRatelimitData(&rlDesc),
 	)
-	annos.WithRateLimiting(&rlDesc)
 	if err != nil {
 		return nil, "", annos, fmt.Errorf("grafana-client: list service accounts: %w", err)
 	}
@@ -578,19 +538,14 @@ func (c *Client) ListServiceAccounts(ctx context.Context, pVars *PaginationVars)
 // HTTP 404 maps to ErrRBACUnavailable (OSS build without access-control).
 func (c *Client) ListRoles(ctx context.Context) ([]*Role, annotations.Annotations, error) {
 	var roles rolesListResponse
-	var rlDesc v2.RateLimitDescription
-	annos := annotations.Annotations{}
-
-	err := c.doRequest(
+	annos, err := c.doRequest(
 		ctx,
 		http.MethodGet,
 		c.buildResourceURL(AccessControlRolesPath),
 		&roles,
 		nil,
 		nil,
-		uhttp.WithRatelimitData(&rlDesc),
 	)
-	annos.WithRateLimiting(&rlDesc)
 	if err != nil {
 		if rbacUnavailable(err) {
 			return nil, annos, fmt.Errorf("%w: %w", ErrRBACUnavailable, err)
@@ -607,24 +562,20 @@ func (c *Client) ListRoles(ctx context.Context) ([]*Role, annotations.Annotation
 // teamIDs slice returns an empty map without calling the API. HTTP 404 maps to
 // ErrRBACUnavailable (OSS build without access-control).
 func (c *Client) ListRolesForTeams(ctx context.Context, teamIDs []int) (map[string][]*Role, annotations.Annotations, error) {
-	annos := annotations.Annotations{}
 	if len(teamIDs) == 0 {
-		return map[string][]*Role{}, annos, nil
+		return map[string][]*Role{}, nil, nil
 	}
 
 	var rolesByTeam map[string][]*Role
-	var rlDesc v2.RateLimitDescription
 	req := &ListRolesForTeamsRequest{TeamIDs: teamIDs}
-	err := c.doRequest(
+	annos, err := c.doRequest(
 		ctx,
 		http.MethodPost,
 		c.buildResourceURL(SearchTeamRolesPath),
 		&rolesByTeam,
 		req,
 		nil,
-		uhttp.WithRatelimitData(&rlDesc),
 	)
-	annos.WithRateLimiting(&rlDesc)
 	if err != nil {
 		if rbacUnavailable(err) {
 			return nil, annos, fmt.Errorf("%w: %w", ErrRBACUnavailable, err)

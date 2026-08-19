@@ -14,27 +14,18 @@ import (
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
-	"google.golang.org/protobuf/proto"
 )
 
 type serviceAccountBuilder struct {
-	client   *grafana.Client
-	syncOrgs bool
+	client *grafana.Client
 }
 
-func newServiceAccountBuilder(client *grafana.Client, syncOrgs bool) *serviceAccountBuilder {
-	return &serviceAccountBuilder{client: client, syncOrgs: syncOrgs}
+func newServiceAccountBuilder(client *grafana.Client) *serviceAccountBuilder {
+	return &serviceAccountBuilder{client: client}
 }
 
 func (s *serviceAccountBuilder) ResourceType(_ context.Context) *v2.ResourceType {
-	rt := proto.Clone(resourceTypeServiceAccount).(*v2.ResourceType)
-	annos := annotations.Annotations(rt.GetAnnotations())
-	if !s.syncOrgs {
-		// Org-role grants need the org type in sync; skip the grants pass otherwise.
-		annos.Update(&v2.SkipEntitlementsAndGrants{})
-		rt.Annotations = annos
-	}
-	return rt
+	return resourceTypeServiceAccount
 }
 
 func serviceAccountResource(sa *grafana.ServiceAccount) (*v2.Resource, error) {
@@ -119,10 +110,6 @@ func (s *serviceAccountBuilder) Entitlements(_ context.Context, _ *v2.Resource, 
 // field (Viewer/Editor/Admin). GET /api/org/users does not include service
 // accounts, so org-side Grants alone miss that access.
 func (s *serviceAccountBuilder) Grants(ctx context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
-	if !s.syncOrgs {
-		return nil, "", nil, nil
-	}
-
 	rawProfile := resource.GetProfile()
 	if rawProfile == nil {
 		ctxzap.Extract(ctx).Debug(

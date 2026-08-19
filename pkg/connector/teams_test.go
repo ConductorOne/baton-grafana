@@ -117,7 +117,7 @@ func TestTeamAndServiceAccountPagination(t *testing.T) {
 			name: "service accounts",
 			path: "/api/serviceaccounts/search",
 			run: func(t *testing.T, ts *httptest.Server) {
-				builder := newServiceAccountBuilder(newCloudClientForTest(t, ts), true)
+				builder := newServiceAccountBuilder(newCloudClientForTest(t, ts))
 				token := &pagination.Token{}
 				var ids []string
 				for {
@@ -450,7 +450,7 @@ func TestServiceAccountListAndOrgGrant(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	builder := newServiceAccountBuilder(newCloudClientForTest(t, ts), true)
+	builder := newServiceAccountBuilder(newCloudClientForTest(t, ts))
 	resources, _, _, err := builder.List(context.Background(), nil, &pagination.Token{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -504,26 +504,6 @@ func TestServiceAccountListAndOrgGrant(t *testing.T) {
 	saTypeAnnos := annotations.Annotations(resourceTypeServiceAccount.Annotations)
 	if saTypeAnnos.Contains(&v2.OptInRequired{}) {
 		t.Fatal("service_account resource type must sync by default; OptInRequired is only for RBAC roles")
-	}
-}
-
-func TestServiceAccountSkipsOrgGrantsWhenOrgNotSynced(t *testing.T) {
-	builder := newServiceAccountBuilder(nil, false)
-
-	rt := builder.ResourceType(context.Background())
-	annos := annotations.Annotations(rt.Annotations)
-	if !annos.Contains(&v2.SkipEntitlementsAndGrants{}) {
-		t.Fatal("when org is excluded from sync, SA type must SkipEntitlementsAndGrants")
-	}
-
-	grants, _, _, err := builder.Grants(context.Background(), &v2.Resource{
-		Id: &v2.ResourceId{ResourceType: resourceTypeServiceAccount.Id, Resource: "1"},
-	}, &pagination.Token{})
-	if err != nil {
-		t.Fatalf("Grants: %v", err)
-	}
-	if len(grants) != 0 {
-		t.Fatalf("expected no SA→org grants when org is not synced, got %d", len(grants))
 	}
 }
 
