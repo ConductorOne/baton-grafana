@@ -145,15 +145,16 @@ func (t *teamBuilder) Grant(ctx context.Context, principal *v2.Resource, entitle
 		return nil, status.Errorf(codes.InvalidArgument, "grafana-connector: invalid user id %q: %v", principal.Id.Resource, err)
 	}
 
-	err = t.client.AddUserToTeam(ctx, teamID, userID)
+	annos, err := t.client.AddUserToTeam(ctx, teamID, userID)
 	if err != nil {
 		if errors.Is(err, grafana.ErrTeamMemberAlreadyExists) {
-			return annotations.New(&v2.GrantAlreadyExists{}), nil
+			annos.Update(&v2.GrantAlreadyExists{})
+			return annos, nil
 		}
-		return nil, fmt.Errorf("grafana-connector: failed to add user %d to team %d: %w", userID, teamID, err)
+		return annos, fmt.Errorf("grafana-connector: failed to add user %d to team %d: %w", userID, teamID, err)
 	}
 
-	return nil, nil
+	return annos, nil
 }
 
 func (t *teamBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
@@ -171,13 +172,14 @@ func (t *teamBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.
 		return nil, status.Errorf(codes.InvalidArgument, "grafana-connector: invalid user id %q: %v", principal.Id.Resource, err)
 	}
 
-	err = t.client.RemoveUserFromTeam(ctx, teamID, userID)
+	annos, err := t.client.RemoveUserFromTeam(ctx, teamID, userID)
 	if err != nil {
 		if errors.Is(err, grafana.ErrTeamMemberNotFound) {
-			return annotations.New(&v2.GrantAlreadyRevoked{}), nil
+			annos.Update(&v2.GrantAlreadyRevoked{})
+			return annos, nil
 		}
-		return nil, fmt.Errorf("grafana-connector: failed to remove user %d from team %d: %w", userID, teamID, err)
+		return annos, fmt.Errorf("grafana-connector: failed to remove user %d from team %d: %w", userID, teamID, err)
 	}
 
-	return nil, nil
+	return annos, nil
 }

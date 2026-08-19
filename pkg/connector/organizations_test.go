@@ -185,14 +185,11 @@ func TestGrantCloud_RoleChangeSuccess(t *testing.T) {
 		t.Fatalf("userResource: %v", err)
 	}
 
-	annos, err := newOrgBuilder(newCloudClientForTest(t, ts)).Grant(
+	_, err = newOrgBuilder(newCloudClientForTest(t, ts)).Grant(
 		context.Background(), principal, testOrgEntitlement("1", roleEditor),
 	)
 	if err != nil {
 		t.Fatalf("Grant returned unexpected error: %v", err)
-	}
-	if len(annos) != 0 {
-		t.Error("expected no annotations for successful role change")
 	}
 	if !patchCalled {
 		t.Error("expected PATCH /api/org/users/42 to be called")
@@ -282,14 +279,11 @@ func TestRevokeCloud_RemovesUser(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	annos, err := newOrgBuilder(newCloudClientForTest(t, ts)).Revoke(
+	_, err := newOrgBuilder(newCloudClientForTest(t, ts)).Revoke(
 		context.Background(), testGrant("42", "1", roleViewer),
 	)
 	if err != nil {
 		t.Fatalf("Revoke returned unexpected error: %v", err)
-	}
-	if len(annos) != 0 {
-		t.Error("expected no annotations for successful revoke")
 	}
 	if !deleteCalled {
 		t.Error("expected DELETE /api/org/users/42 to be called")

@@ -160,7 +160,7 @@ func (c *Client) ListUsers(ctx context.Context, pVars *PaginationVars) ([]*User,
 }
 
 // doRequest is the only HTTP call site. It always captures rate-limit headers
-// so callers cannot miss them. Extra DoOptions (if any) are applied after that.
+// so list and mutate callers can return them to the SDK.
 func (c *Client) doRequest(
 	ctx context.Context,
 	method string,
@@ -168,7 +168,6 @@ func (c *Client) doRequest(
 	response any,
 	data any,
 	paginationVars *PaginationVars,
-	doOpts ...uhttp.DoOption,
 ) (annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 	annos := annotations.Annotations{}
@@ -202,9 +201,8 @@ func (c *Client) doRequest(
 		return annos, err
 	}
 
-	doOptions := make([]uhttp.DoOption, 0, len(doOpts)+3)
+	doOptions := make([]uhttp.DoOption, 0, 3)
 	doOptions = append(doOptions, uhttp.WithRatelimitData(&rlDesc))
-	doOptions = append(doOptions, doOpts...)
 	if response != nil {
 		doOptions = append(doOptions, uhttp.WithJSONResponse(response))
 	}
@@ -282,10 +280,10 @@ func (c *Client) GetUserByLoginOrEmail(ctx context.Context, loginOrEmail string)
 }
 
 // CreateUser creates a new user in Grafana.
-func (c *Client) CreateUser(ctx context.Context, req *CreateUserRequest) (*User, error) {
+func (c *Client) CreateUser(ctx context.Context, req *CreateUserRequest) (*User, annotations.Annotations, error) {
 	var user User
 
-	_, err := c.doRequest(
+	annos, err := c.doRequest(
 		ctx,
 		http.MethodPost,
 		c.buildResourceURL(CreateUserPath),
@@ -296,16 +294,16 @@ func (c *Client) CreateUser(ctx context.Context, req *CreateUserRequest) (*User,
 	if err != nil {
 		// Check if this is a 412 Precondition Failed error, which likely means the user already exists
 		if strings.Contains(err.Error(), fmt.Sprintf("%d", http.StatusPreconditionFailed)) {
-			return nil, fmt.Errorf("%w: %w", ErrUserAlreadyExists, err)
+			return nil, annos, fmt.Errorf("%w: %w", ErrUserAlreadyExists, err)
 		}
-		return nil, fmt.Errorf("grafana-client: create user: %w", err)
+		return nil, annos, fmt.Errorf("grafana-client: create user: %w", err)
 	}
 
-	return &user, nil
+	return &user, annos, nil
 }
 
-func (c *Client) DeleteUser(ctx context.Context, userId string) error {
-	_, err := c.doRequest(
+func (c *Client) DeleteUser(ctx context.Context, userId string) (annotations.Annotations, error) {
+	annos, err := c.doRequest(
 		ctx,
 		http.MethodDelete,
 		c.buildResourceURL(DeleteUserPath, userId),
@@ -314,10 +312,10 @@ func (c *Client) DeleteUser(ctx context.Context, userId string) error {
 		nil,
 	)
 	if err != nil {
-		return fmt.Errorf("grafana-client: delete user: %w", err)
+		return annos, fmt.Errorf("grafana-client: delete user: %w", err)
 	}
 
-	return nil
+	return annos, nil
 }
 
 // GetCurrentOrg fetches the organization the authenticated service account belongs to.
@@ -354,44 +352,44 @@ func (c *Client) ListCurrentOrgUsers(ctx context.Context) ([]*UserByOrgResponse,
 
 // UpdateOrgUserRole updates a user's role in the current org via PATCH.
 // In Cloud mode this replaces the self-hosted remove+re-add pattern.
-func (c *Client) UpdateOrgUserRole(ctx context.Context, userID int, role string) error {
+func (c *Client) UpdateOrgUserRole(ctx context.Context, userID int, role string) (annotations.Annotations, error) {
 	req := &UpdateOrgUserRoleRequest{Role: role}
 
-	_, err := c.doRequest(ctx, http.MethodPatch, c.buildResourceURL(UpdateCurrentOrgUserPath, userID), nil, req, nil)
+	annos, err := c.doRequest(ctx, http.MethodPatch, c.buildResourceURL(UpdateCurrentOrgUserPath, userID), nil, req, nil)
 	if err != nil {
-		return fmt.Errorf("grafana-client: update org user role: %w", err)
+		return annos, fmt.Errorf("grafana-client: update org user role: %w", err)
 	}
 
-	return nil
+	return annos, nil
 }
 
 // AddUserToCurrentOrg adds an existing user (by login or email) to the current org.
 // Reuses AddUserToOrgRequest — same request shape as the self-hosted endpoint.
-func (c *Client) AddUserToCurrentOrg(ctx context.Context, req *AddUserToOrgRequest) error {
-	_, err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(CurrentOrgUsersPath), nil, req, nil)
+func (c *Client) AddUserToCurrentOrg(ctx context.Context, req *AddUserToOrgRequest) (annotations.Annotations, error) {
+	annos, err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(CurrentOrgUsersPath), nil, req, nil)
 	if err != nil {
-		return fmt.Errorf("grafana-client: add user to current org: %w", err)
+		return annos, fmt.Errorf("grafana-client: add user to current org: %w", err)
 	}
 
-	return nil
+	return annos, nil
 }
 
 // RemoveCurrentOrgUser removes a user from the current organization by user ID.
-func (c *Client) RemoveCurrentOrgUser(ctx context.Context, userID int) error {
-	_, err := c.doRequest(ctx, http.MethodDelete, c.buildResourceURL(UpdateCurrentOrgUserPath, userID), nil, nil, nil)
+func (c *Client) RemoveCurrentOrgUser(ctx context.Context, userID int) (annotations.Annotations, error) {
+	annos, err := c.doRequest(ctx, http.MethodDelete, c.buildResourceURL(UpdateCurrentOrgUserPath, userID), nil, nil, nil)
 	if err != nil {
-		return fmt.Errorf("grafana-client: remove current org user: %w", err)
+		return annos, fmt.Errorf("grafana-client: remove current org user: %w", err)
 	}
 
-	return nil
+	return annos, nil
 }
 
 // InviteUserToOrg sends an invitation to a user to join the current organization.
 // Used in Cloud mode for CreateAccount — direct user creation is not available via service account tokens.
-func (c *Client) InviteUserToOrg(ctx context.Context, req *InviteUserRequest) (*InviteUserResponse, error) {
+func (c *Client) InviteUserToOrg(ctx context.Context, req *InviteUserRequest) (*InviteUserResponse, annotations.Annotations, error) {
 	var resp InviteUserResponse
 
-	_, err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(InviteUserPath), &resp, req, nil)
+	annos, err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(InviteUserPath), &resp, req, nil)
 	if err != nil {
 		// Grafana rejects invites for brand-new external users when the basic
 		// login form is disabled (the Grafana Cloud default). Gate on the 400
@@ -400,17 +398,17 @@ func (c *Client) InviteUserToOrg(ctx context.Context, req *InviteUserRequest) (*
 		// reworded message just falls through to the generic error below.
 		if strings.Contains(err.Error(), fmt.Sprintf("%d", http.StatusBadRequest)) &&
 			strings.Contains(err.Error(), "login is disabled") {
-			return nil, fmt.Errorf("%w: %w", ErrExternalUserLoginDisabled, err)
+			return nil, annos, fmt.Errorf("%w: %w", ErrExternalUserLoginDisabled, err)
 		}
-		return nil, fmt.Errorf("grafana-client: invite user to org: %w", err)
+		return nil, annos, fmt.Errorf("grafana-client: invite user to org: %w", err)
 	}
 
-	return &resp, nil
+	return &resp, annos, nil
 }
 
 // AddUserToOrg adds a user to an organization with a specified role.
-func (c *Client) AddUserToOrg(ctx context.Context, orgID string, req *AddUserToOrgRequest) error {
-	_, err := c.doRequest(
+func (c *Client) AddUserToOrg(ctx context.Context, orgID string, req *AddUserToOrgRequest) (annotations.Annotations, error) {
+	annos, err := c.doRequest(
 		ctx,
 		http.MethodPost,
 		c.buildResourceURL(AddUserToOrgPath, orgID),
@@ -419,15 +417,15 @@ func (c *Client) AddUserToOrg(ctx context.Context, orgID string, req *AddUserToO
 		nil,
 	)
 	if err != nil {
-		return fmt.Errorf("grafana-client: add user to org: %w", err)
+		return annos, fmt.Errorf("grafana-client: add user to org: %w", err)
 	}
 
-	return nil
+	return annos, nil
 }
 
 // RemoveUserFromOrg removes a user from an organization.
-func (c *Client) RemoveUserFromOrg(ctx context.Context, orgID string, userID int) error {
-	_, err := c.doRequest(
+func (c *Client) RemoveUserFromOrg(ctx context.Context, orgID string, userID int) (annotations.Annotations, error) {
+	annos, err := c.doRequest(
 		ctx,
 		http.MethodDelete,
 		c.buildResourceURL(RemoveUserFromOrgPath, orgID, userID),
@@ -436,10 +434,10 @@ func (c *Client) RemoveUserFromOrg(ctx context.Context, orgID string, userID int
 		nil,
 	)
 	if err != nil {
-		return fmt.Errorf("grafana-client: remove user from org: %w", err)
+		return annos, fmt.Errorf("grafana-client: remove user from org: %w", err)
 	}
 
-	return nil
+	return annos, nil
 }
 
 // ListTeams calls GET /api/teams/search (page/perpage, 1-based).
@@ -482,35 +480,35 @@ func (c *Client) ListTeamMembers(ctx context.Context, teamID int) ([]*TeamMember
 
 // AddUserToTeam calls POST /api/teams/{id}/members with {"userId": N}.
 // HTTP 400 with "already added to this team" maps to ErrTeamMemberAlreadyExists.
-func (c *Client) AddUserToTeam(ctx context.Context, teamID, userID int) error {
+func (c *Client) AddUserToTeam(ctx context.Context, teamID, userID int) (annotations.Annotations, error) {
 	req := &AddUserToTeamRequest{UserID: userID}
 
-	_, err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(TeamMembersPath, teamID), nil, req, nil)
+	annos, err := c.doRequest(ctx, http.MethodPost, c.buildResourceURL(TeamMembersPath, teamID), nil, req, nil)
 	if err != nil {
 		if status.Code(err) == codes.InvalidArgument &&
 			strings.Contains(strings.ToLower(err.Error()), "already added to this team") {
-			return fmt.Errorf("%w: %w", ErrTeamMemberAlreadyExists, err)
+			return annos, fmt.Errorf("%w: %w", ErrTeamMemberAlreadyExists, err)
 		}
-		return fmt.Errorf("grafana-client: add user to team: %w", err)
+		return annos, fmt.Errorf("grafana-client: add user to team: %w", err)
 	}
 
-	return nil
+	return annos, nil
 }
 
 // RemoveUserFromTeam calls DELETE /api/teams/{id}/members/{userId}.
 // HTTP 404 with "Team member not found" maps to ErrTeamMemberNotFound.
 // Other 404 bodies (for example, "Team not found") remain errors.
-func (c *Client) RemoveUserFromTeam(ctx context.Context, teamID, userID int) error {
-	_, err := c.doRequest(ctx, http.MethodDelete, c.buildResourceURL(TeamMemberByUserPath, teamID, userID), nil, nil, nil)
+func (c *Client) RemoveUserFromTeam(ctx context.Context, teamID, userID int) (annotations.Annotations, error) {
+	annos, err := c.doRequest(ctx, http.MethodDelete, c.buildResourceURL(TeamMemberByUserPath, teamID, userID), nil, nil, nil)
 	if err != nil {
 		if status.Code(err) == codes.NotFound &&
 			strings.Contains(err.Error(), "Team member not found") {
-			return fmt.Errorf("%w: %w", ErrTeamMemberNotFound, err)
+			return annos, fmt.Errorf("%w: %w", ErrTeamMemberNotFound, err)
 		}
-		return fmt.Errorf("grafana-client: remove user from team: %w", err)
+		return annos, fmt.Errorf("grafana-client: remove user from team: %w", err)
 	}
 
-	return nil
+	return annos, nil
 }
 
 // ListServiceAccounts calls GET /api/serviceaccounts/search (page/perpage, 1-based).

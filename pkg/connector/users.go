@@ -251,7 +251,7 @@ func (u *userBuilder) createAccountCloud(
 		SendEmail:    true,
 	}
 
-	inviteResp, err := u.client.InviteUserToOrg(ctx, inviteReq)
+	inviteResp, annos, err := u.client.InviteUserToOrg(ctx, inviteReq)
 	if err != nil {
 		// Grafana Cloud disables the basic login form by default, so instance-level
 		// invites for brand-new external users are rejected. Surface an actionable
@@ -260,7 +260,7 @@ func (u *userBuilder) createAccountCloud(
 		if errors.Is(err, grafana.ErrExternalUserLoginDisabled) {
 			// This configuration prerequisite is terminal, while the wrapped
 			// sentinel remains available to callers.
-			return nil, nil, nil, uhttp.WrapErrors(
+			return nil, nil, annos, uhttp.WrapErrors(
 				codes.InvalidArgument,
 				fmt.Sprintf(
 					"grafana-connector: cloud: cannot provision new user %q because the instance's basic login form is disabled (the Grafana Cloud default); "+
@@ -269,13 +269,13 @@ func (u *userBuilder) createAccountCloud(
 					email),
 				err)
 		}
-		return nil, nil, nil, fmt.Errorf("grafana-connector: cloud: failed to invite user: %w", err)
+		return nil, nil, annos, fmt.Errorf("grafana-connector: cloud: failed to invite user: %w", err)
 	}
 
 	l.Debug("Cloud mode: invite sent", zap.Bool("email_sent", inviteResp.EmailSent))
 
 	// ActionRequiredResult — user must accept invite; no resource ID available until they do
-	return &v2.CreateAccountResponse_ActionRequiredResult{}, nil, nil, nil
+	return &v2.CreateAccountResponse_ActionRequiredResult{}, nil, annos, nil
 }
 
 // createAccountSelfHosted is the original CreateAccount logic for self-hosted Grafana — unchanged.
@@ -317,7 +317,7 @@ func (u *userBuilder) createAccountSelfHosted(
 	}
 
 	// Create the user in Grafana
-	user, err := u.client.CreateUser(ctx, createUserReq)
+	user, annos, err := u.client.CreateUser(ctx, createUserReq)
 	if err != nil {
 		// Check if the error indicates the user already exists
 		if errors.Is(err, grafana.ErrUserAlreadyExists) {
@@ -338,7 +338,7 @@ func (u *userBuilder) createAccountSelfHosted(
 						zap.String("login", login))
 
 					// Return the original error if we can't find the user
-					return nil, nil, nil, fmt.Errorf("grafana-connector: failed to create user and couldn't find existing user: %w", err)
+					return nil, nil, annos, fmt.Errorf("grafana-connector: failed to create user and couldn't find existing user: %w", err)
 				}
 			}
 
@@ -346,7 +346,7 @@ func (u *userBuilder) createAccountSelfHosted(
 			resource, resourceErr := userResource(existingUser)
 			if resourceErr != nil {
 				l.Error("Failed to create resource for existing user", zap.Error(resourceErr))
-				return nil, nil, nil, fmt.Errorf("grafana-connector: failed to create resource for existing user: %w", resourceErr)
+				return nil, nil, annos, fmt.Errorf("grafana-connector: failed to create resource for existing user: %w", resourceErr)
 			}
 
 			successResult := &v2.CreateAccountResponse_SuccessResult{
@@ -354,12 +354,12 @@ func (u *userBuilder) createAccountSelfHosted(
 			}
 
 			// Return with GrantAlreadyExists annotation
-			return successResult, nil, nil, nil
+			return successResult, nil, annos, nil
 		}
 
 		// For other errors, log and return as usual
 		l.Error("Failed to create user in Grafana", zap.Error(err), zap.String("email", email))
-		return nil, nil, nil, fmt.Errorf("grafana-connector: failed to create user: %w", err)
+		return nil, nil, annos, fmt.Errorf("grafana-connector: failed to create user: %w", err)
 	}
 
 	// Create a resource from the new user (self-hosted CreateUser response).
@@ -382,7 +382,7 @@ func (u *userBuilder) createAccountSelfHosted(
 		},
 	}
 
-	return successResult, plaintextData, nil, nil
+	return successResult, plaintextData, annos, nil
 }
 
 // Delete removes a user from Grafana.
@@ -408,18 +408,19 @@ func (u *userBuilder) deleteCloud(ctx context.Context, resourceId *v2.ResourceId
 	l.Debug("Cloud mode: delete removes user from org only — global Grafana Cloud account is NOT deleted",
 		zap.String("user_id", resourceId.Resource))
 
-	if err = u.client.RemoveCurrentOrgUser(ctx, userID); err != nil {
-		return nil, fmt.Errorf("grafana-connector: cloud: failed to remove user %d from org: %w", userID, err)
+	annos, err := u.client.RemoveCurrentOrgUser(ctx, userID)
+	if err != nil {
+		return annos, fmt.Errorf("grafana-connector: cloud: failed to remove user %d from org: %w", userID, err)
 	}
 
-	return nil, nil
+	return annos, nil
 }
 
 // deleteSelfHosted is the original Delete logic for self-hosted Grafana — unchanged.
 func (u *userBuilder) deleteSelfHosted(ctx context.Context, resourceId *v2.ResourceId) (annotations.Annotations, error) {
-	err := u.client.DeleteUser(ctx, resourceId.Resource)
+	annos, err := u.client.DeleteUser(ctx, resourceId.Resource)
 	if err != nil {
-		return nil, fmt.Errorf("grafana-connector: failed to delete user: %w", err)
+		return annos, fmt.Errorf("grafana-connector: failed to delete user: %w", err)
 	}
-	return nil, nil
+	return annos, nil
 }
