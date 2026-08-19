@@ -14,7 +14,7 @@ var (
 		Id:          "user",
 		DisplayName: "User",
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_USER},
-		Annotations: annotationsForUserResourceType(),
+		Annotations: annotations.New(&v2.SkipEntitlementsAndGrants{}),
 	}
 	resourceTypeTeam = &v2.ResourceType{
 		Id:          "team",

@@ -14,21 +14,30 @@ import (
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
 type serviceAccountBuilder struct {
-	client *grafana.Client
+	client   *grafana.Client
+	syncOrgs bool
 }
 
-func newServiceAccountBuilder(client *grafana.Client) *serviceAccountBuilder {
-	return &serviceAccountBuilder{client: client}
+func newServiceAccountBuilder(client *grafana.Client, syncOrgs bool) *serviceAccountBuilder {
+	return &serviceAccountBuilder{client: client, syncOrgs: syncOrgs}
 }
 
 func (s *serviceAccountBuilder) ResourceType(_ context.Context) *v2.ResourceType {
-	return resourceTypeServiceAccount
+	rt := proto.Clone(resourceTypeServiceAccount).(*v2.ResourceType)
+	annos := annotations.Annotations(rt.GetAnnotations())
+	if !s.syncOrgs {
+		// Org-role grants need the org type in sync; skip the grants pass otherwise.
+		annos.Update(&v2.SkipEntitlementsAndGrants{})
+		rt.Annotations = annos
+	}
+	return rt
 }
 
-func serviceAccountResource(sa grafana.ServiceAccount) (*v2.Resource, error) {
+func serviceAccountResource(sa *grafana.ServiceAccount) (*v2.Resource, error) {
 	profile := map[string]any{
 		profileKeySAID:       sa.ID,
 		profileKeyUID:        sa.UID,
@@ -69,45 +78,37 @@ func serviceAccountResource(sa grafana.ServiceAccount) (*v2.Resource, error) {
 }
 
 func (s *serviceAccountBuilder) List(ctx context.Context, _ *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
-	// GET /api/serviceaccounts/search uses 1-based page; page 1 is the first page.
 	bag, page, err := parsePageToken(pToken, &v2.ResourceId{ResourceType: resourceTypeServiceAccount.Id})
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("grafana-connector: failed to parse page token: %w", err)
 	}
-	if page == 0 {
-		page = 1
-	}
 
-	paginationOpts := grafana.PaginationVars{
+	serviceAccounts, nextPage, annos, err := s.client.ListServiceAccounts(ctx, &grafana.PaginationVars{
 		Size: ResourcesPageSize,
 		Page: page,
-	}
-
-	serviceAccounts, numNextPage, err := s.client.ListServiceAccounts(ctx, &paginationOpts)
+	})
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("grafana-connector: failed to list service accounts: %w", err)
+		return nil, "", annos, fmt.Errorf("grafana-connector: failed to list service accounts: %w", err)
 	}
 
-	var pageToken string
-	if numNextPage > 0 {
-		pageToken = strconv.FormatUint(numNextPage, 10)
-	}
-
-	next, err := bag.NextToken(pageToken)
+	next, err := bag.NextToken(nextPage)
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("grafana-connector: failed to generate next page token: %w", err)
+		return nil, "", annos, fmt.Errorf("grafana-connector: failed to generate next page token: %w", err)
 	}
 
 	resources := make([]*v2.Resource, 0, len(serviceAccounts))
 	for _, serviceAccount := range serviceAccounts {
+		if serviceAccount == nil {
+			continue
+		}
 		resource, err := serviceAccountResource(serviceAccount)
 		if err != nil {
-			return nil, "", nil, fmt.Errorf("grafana-connector: failed to create service account resource %q: %w", serviceAccount.Name, err)
+			return nil, "", annos, fmt.Errorf("grafana-connector: failed to create service account resource %q: %w", serviceAccount.Name, err)
 		}
 		resources = append(resources, resource)
 	}
 
-	return resources, next, nil, nil
+	return resources, next, annos, nil
 }
 
 func (s *serviceAccountBuilder) Entitlements(_ context.Context, _ *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
@@ -118,6 +119,10 @@ func (s *serviceAccountBuilder) Entitlements(_ context.Context, _ *v2.Resource, 
 // field (Viewer/Editor/Admin). GET /api/org/users does not include service
 // accounts, so org-side Grants alone miss that access.
 func (s *serviceAccountBuilder) Grants(ctx context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
+	if !s.syncOrgs {
+		return nil, "", nil, nil
+	}
+
 	rawProfile := resource.GetProfile()
 	if rawProfile == nil {
 		ctxzap.Extract(ctx).Debug(

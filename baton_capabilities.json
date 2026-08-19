@@ -32,8 +32,7 @@
         ]
       },
       "capabilities": [
-        "CAPABILITY_SYNC",
-        "CAPABILITY_PROVISION"
+        "CAPABILITY_SYNC"
       ],
       "permissions": {},
       "optInRequired": true

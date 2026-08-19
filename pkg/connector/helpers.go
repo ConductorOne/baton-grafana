@@ -7,14 +7,13 @@ import (
 
 	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
-	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/language"
 )
 
 const (
-	ResourcesPageSize uint64 = 1000
+	ResourcesPageSize uint64 = 50
 
 	// Org role entitlement slugs (also used as Grafana role strings).
 	roleViewer = "Viewer"
@@ -60,12 +59,6 @@ func titleCase(s string) string {
 	return titleCaser.String(s)
 }
 
-func annotationsForUserResourceType() annotations.Annotations {
-	annos := annotations.Annotations{}
-	annos.Update(&v2.SkipEntitlementsAndGrants{})
-	return annos
-}
-
 // If pagToken.Token is an empty string, the function returns 0.
 // Callers decide what "page 0" means for their endpoint: /api/orgs is 0-based
 // (page 0 is the first page), while /api/users is 1-based and normalizes the
@@ -108,6 +101,6 @@ func isIRMOrOnCallRole(name string) bool {
 
 // shouldEmitRole mirrors the List filter so team→role grants never target a
 // role resource that List would skip (Hidden or non-IRM/OnCall).
-func shouldEmitRole(role grafana.Role) bool {
-	return !role.Hidden && isIRMOrOnCallRole(role.Name)
+func shouldEmitRole(role *grafana.Role) bool {
+	return role != nil && !role.Hidden && isIRMOrOnCallRole(role.Name)
 }

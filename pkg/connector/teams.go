@@ -29,7 +29,7 @@ func (t *teamBuilder) ResourceType(_ context.Context) *v2.ResourceType {
 	return resourceTypeTeam
 }
 
-func teamResource(team grafana.Team) (*v2.Resource, error) {
+func teamResource(team *grafana.Team) (*v2.Resource, error) {
 	profile := map[string]any{
 		profileKeyTeamID:      team.ID,
 		profileKeyUID:         team.UID,
@@ -48,45 +48,37 @@ func teamResource(team grafana.Team) (*v2.Resource, error) {
 }
 
 func (t *teamBuilder) List(ctx context.Context, _ *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
-	// GET /api/teams/search uses 1-based page; page 1 is the first page.
 	bag, page, err := parsePageToken(pToken, &v2.ResourceId{ResourceType: resourceTypeTeam.Id})
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("grafana-connector: failed to parse page token: %w", err)
 	}
-	if page == 0 {
-		page = 1
-	}
 
-	paginationOpts := grafana.PaginationVars{
+	teams, nextPage, annos, err := t.client.ListTeams(ctx, &grafana.PaginationVars{
 		Size: ResourcesPageSize,
 		Page: page,
-	}
-
-	teams, numNextPage, err := t.client.ListTeams(ctx, &paginationOpts)
+	})
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("grafana-connector: failed to list teams: %w", err)
+		return nil, "", annos, fmt.Errorf("grafana-connector: failed to list teams: %w", err)
 	}
 
-	var pageToken string
-	if numNextPage > 0 {
-		pageToken = strconv.FormatUint(numNextPage, 10)
-	}
-
-	next, err := bag.NextToken(pageToken)
+	next, err := bag.NextToken(nextPage)
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("grafana-connector: failed to generate next page token: %w", err)
+		return nil, "", annos, fmt.Errorf("grafana-connector: failed to generate next page token: %w", err)
 	}
 
 	resources := make([]*v2.Resource, 0, len(teams))
 	for _, team := range teams {
+		if team == nil {
+			continue
+		}
 		resource, err := teamResource(team)
 		if err != nil {
-			return nil, "", nil, fmt.Errorf("grafana-connector: failed to create team resource %q: %w", team.Name, err)
+			return nil, "", annos, fmt.Errorf("grafana-connector: failed to create team resource %q: %w", team.Name, err)
 		}
 		resources = append(resources, resource)
 	}
 
-	return resources, next, nil, nil
+	return resources, next, annos, nil
 }
 
 // Entitlements is a no-op — every team shares the same membership entitlement
@@ -119,30 +111,27 @@ func (t *teamBuilder) Grants(ctx context.Context, resource *v2.Resource, _ *pagi
 		return nil, "", nil, fmt.Errorf("grafana-connector: invalid team id %q: %w", resource.Id.Resource, err)
 	}
 
-	members, err := t.client.ListTeamMembers(ctx, teamID)
+	members, annos, err := t.client.ListTeamMembers(ctx, teamID)
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("grafana-connector: failed to list members for team %d: %w", teamID, err)
+		return nil, "", annos, fmt.Errorf("grafana-connector: failed to list members for team %d: %w", teamID, err)
 	}
 
 	grants := make([]*v2.Grant, 0, len(members))
 	for _, member := range members {
+		if member == nil {
+			continue
+		}
 		principalID, err := rs.NewResourceID(resourceTypeUser, member.UserID)
 		if err != nil {
-			return nil, "", nil, fmt.Errorf("grafana-connector: failed to build user resource id for team member %d: %w", member.UserID, err)
+			return nil, "", annos, fmt.Errorf("grafana-connector: failed to build user resource id for team member %d: %w", member.UserID, err)
 		}
 		grants = append(grants, grant.NewGrant(resource, teamMemberEntitlement, principalID))
 	}
 
-	return grants, "", nil, nil
+	return grants, "", annos, nil
 }
 
 func (t *teamBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) (annotations.Annotations, error) {
-	if principal == nil || principal.Id == nil {
-		return nil, status.Error(codes.InvalidArgument, "grafana-connector: team membership principal is required")
-	}
-	if entitlement == nil || entitlement.Resource == nil || entitlement.Resource.Id == nil {
-		return nil, status.Error(codes.InvalidArgument, "grafana-connector: team membership entitlement resource is required")
-	}
 	if principal.Id.ResourceType != resourceTypeUser.Id {
 		return nil, status.Errorf(codes.InvalidArgument, "grafana-connector: team membership principal must be a user, got %s", principal.Id.ResourceType)
 	}
@@ -168,12 +157,6 @@ func (t *teamBuilder) Grant(ctx context.Context, principal *v2.Resource, entitle
 }
 
 func (t *teamBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
-	if grant == nil || grant.Principal == nil || grant.Principal.Id == nil {
-		return nil, status.Error(codes.InvalidArgument, "grafana-connector: team membership revoke principal is required")
-	}
-	if grant.Entitlement == nil || grant.Entitlement.Resource == nil || grant.Entitlement.Resource.Id == nil {
-		return nil, status.Error(codes.InvalidArgument, "grafana-connector: team membership revoke entitlement resource is required")
-	}
 	principal := grant.Principal
 	if principal.Id.ResourceType != resourceTypeUser.Id {
 		return nil, status.Errorf(codes.InvalidArgument, "grafana-connector: team membership principal must be a user, got %s", principal.Id.ResourceType)

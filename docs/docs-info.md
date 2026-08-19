@@ -48,15 +48,17 @@ field group:
      that op only when the role type is in the sync, it paginates teams and
      batches `POST /api/access-control/teams/roles/search` per page (same
      current-org team scope as Teams above), and it fails closed on every RBAC
-     error (an empty successful emission would wipe prior assignments). Team
-     membership still syncs independently when roles are off. Operators enable
-     roles in the C1 UI when they have Cloud/Enterprise.
+     error (an empty successful emission would wipe prior assignments). Grants are
+     **immutable** (C1 cannot provision non-user principals). Team membership
+     still syncs independently when roles are off. Operators enable roles in the
+     C1 UI when they have Cloud/Enterprise.
    - Service accounts — `GET /api/serviceaccounts/search`, also scoped to the
      credential's **current organization** (same caveat as Teams on multi-org
      self-hosted). Service accounts do not appear in `GET /api/org/users`, so they
      are a separate resource; their organization role (Viewer/Editor/Admin) is
-     emitted as an **immutable** org grant (sync-only — org Grant/Revoke accept
-     users only). Synced by default (same Admin credential covers this endpoint).
+     emitted as an **immutable** org grant only when the org type is in the sync
+     (Engine cross-resource filter). Synced by default (same Admin credential
+     covers this endpoint).
 
 2. **Can the connector provision any resources? If so, which ones?**
    - **Accounts (Users)** — `CreateAccount` and `Delete`.
@@ -73,11 +75,8 @@ field group:
      `DELETE /api/teams/{id}/members/{userId}`). Re-adding an existing member
      returns HTTP 400 (`User is already added to this team`) and removing an absent
      member returns HTTP 404, both handled as idempotent successes.
-   - **Team RBAC roles** — `Grant` / `Revoke` a role on a team
-     (`POST /api/access-control/teams/{id}/roles` with `{"roleUid"}`,
-     `DELETE /api/access-control/teams/{id}/roles/{roleUid}`). The assign endpoint
-     returns HTTP 200 even when the role is already assigned, so the connector
-     reads the team's current roles first to report the grant as idempotent.
+   - Team→RBAC role assignments are **synced only** (immutable). C1 cannot grant
+     to non-user principals, so role provisioning is not exposed.
    - Service accounts are **not** provisioned (read-only).
 
    > **Note (Grafana Cloud account creation).** Cloud instances ship with the
@@ -166,9 +165,7 @@ API doc root: <https://grafana.com/docs/grafana/latest/developers/http_api/>
 | Operation                      | Method + path                                           | Doc                                                                                                           |
 | :----------------------------- | :------------------------------------------------------ | :------------------------------------------------------------------------------------------------------------ |
 | List roles                     | `GET /api/access-control/roles`                         | [RBAC HTTP API](https://grafana.com/docs/grafana/latest/developers/http_api/access_control/#get-all-roles)    |
-| List roles on a team           | `GET /api/access-control/teams/{id}/roles`              | [RBAC HTTP API](https://grafana.com/docs/grafana/latest/developers/http_api/access_control/#list-your-roles)  |
-| Assign role to team (grant)    | `POST /api/access-control/teams/{id}/roles`             | [RBAC HTTP API](https://grafana.com/docs/grafana/latest/developers/http_api/access_control/#add-team-role)    |
-| Remove role from team (revoke) | `DELETE /api/access-control/teams/{id}/roles/{roleUid}` | [RBAC HTTP API](https://grafana.com/docs/grafana/latest/developers/http_api/access_control/#remove-team-role) |
+| List roles on teams (batch)    | `POST /api/access-control/teams/roles/search`           | [RBAC HTTP API](https://grafana.com/docs/grafana/latest/developers/http_api/access_control/)                  |
 
 ### Service accounts
 
@@ -184,11 +181,9 @@ The `role` resource is filtered to the IRM and OnCall plugin roles
 (`plugins:grafana-irm-app:` and `plugins:grafana-oncall-app:` name prefixes) so
 the connector surfaces which teams hold plugin permissions such as **Schedules
 Editor** without syncing the full ~300-entry role catalog. Role identity uses the
-stable role `name` as the resource ID; the instance-specific `uid` (required by the
-assign/unassign endpoints) is stored on the resource profile. Provisioning resolves
-the current UID from the stable name before assignment, and revoke uses the UID on
-the team's current assignment. Grants are emitted from the team side to avoid
-scanning every team per role, and expand through team membership.
+stable role `name` as the resource ID; the instance-specific `uid` is stored on
+the resource profile. Team→role grants are sync-only (immutable) and expand
+through team membership via `GrantExpandable`.
 
 Service accounts are read from `GET /api/serviceaccounts/search` because they are
 absent from `GET /api/org/users`. They are modeled as service-type accounts and are

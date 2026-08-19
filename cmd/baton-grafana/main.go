@@ -7,6 +7,7 @@ import (
 
 	cfg "github.com/conductorone/baton-grafana/pkg/config"
 	"github.com/conductorone/baton-grafana/pkg/connector"
+	"github.com/conductorone/baton-sdk/pkg/cli"
 	configschema "github.com/conductorone/baton-sdk/pkg/config"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/types"
@@ -19,7 +20,7 @@ var version = "dev"
 func main() {
 	ctx := context.Background()
 
-	_, cmd, err := configschema.DefineConfiguration(ctx, "baton-grafana", getConnector, cfg.Config)
+	_, cmd, err := configschema.DefineConfigurationV2(ctx, "baton-grafana", getConnector, cfg.Config)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err.Error())
 		os.Exit(1)
@@ -34,10 +35,13 @@ func main() {
 	}
 }
 
-func getConnector(ctx context.Context, gc *cfg.Grafana) (types.ConnectorServer, error) {
+func getConnector(ctx context.Context, gc *cfg.Grafana, runTimeOpts cli.RunTimeOpts) (types.ConnectorServer, error) {
 	l := ctxzap.Extract(ctx)
 
-	cb, err := connector.New(ctx, gc.Hostname, gc.Username, gc.Password, gc.APIToken)
+	opts := &cli.ConnectorOpts{SyncResourceTypeIDs: runTimeOpts.SyncResourceTypeIDs}
+	syncOrgs := opts.WillSyncResourceType("org")
+
+	cb, err := connector.New(ctx, gc.Hostname, gc.Username, gc.Password, gc.APIToken, syncOrgs)
 	if err != nil {
 		l.Error("error creating connector", zap.Error(err))
 		return nil, err

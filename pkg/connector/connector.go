@@ -15,7 +15,8 @@ import (
 
 // Grafana represents the Baton connector for Grafana.
 type Grafana struct {
-	client *grafana.Client
+	client   *grafana.Client
+	syncOrgs bool
 }
 
 // ResourceSyncers returns a list of syncers for different resource types.
@@ -25,7 +26,7 @@ func (g *Grafana) ResourceSyncers(ctx context.Context) []connectorbuilder.Resour
 		newUserBuilder(g.client),
 		newTeamBuilder(g.client),
 		newRoleBuilder(g.client),
-		newServiceAccountBuilder(g.client),
+		newServiceAccountBuilder(g.client, g.syncOrgs),
 	}
 }
 
@@ -39,7 +40,7 @@ func (g *Grafana) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error) {
 	return &v2.ConnectorMetadata{
 		DisplayName: "Grafana",
 		Description: "Grafana connector syncs organizations, users, teams, RBAC roles, and service accounts. " +
-			"Supports account provisioning, organization role assignment, team membership, and RBAC role assignment.",
+			"Supports account provisioning, organization role assignment, and team membership.",
 		AccountCreationSchema: &v2.ConnectorAccountCreationSchema{
 			FieldMap: map[string]*v2.ConnectorAccountCreationSchema_Field{
 				profileFieldFullName: {
@@ -102,7 +103,7 @@ func (g *Grafana) Validate(ctx context.Context) (annotations.Annotations, error)
 			Size: 1,
 			Page: 0,
 		}
-		_, _, err := g.client.ListOrganizations(ctx, &paginationOpts)
+		_, _, _, err := g.client.ListOrganizations(ctx, &paginationOpts)
 		if err != nil {
 			return nil, fmt.Errorf("grafana-connector: validate: failed to list organizations: %w", err)
 		}
@@ -114,7 +115,8 @@ func (g *Grafana) Validate(ctx context.Context) (annotations.Annotations, error)
 // New initializes a new instance of the Grafana connector.
 // When apiToken is non-empty the connector operates in Cloud mode (Bearer auth, current-org scope).
 // When apiToken is empty the connector operates in self-hosted mode (Basic auth, server-admin scope).
-func New(ctx context.Context, hostname, username, password, apiToken string) (*Grafana, error) {
+// syncOrgs controls whether service-account Grants emit cross-type org-role grants.
+func New(ctx context.Context, hostname, username, password, apiToken string, syncOrgs bool) (*Grafana, error) {
 	grafanaClient, err := grafana.NewClient(ctx, hostname, username, password, apiToken)
 	if err != nil {
 		l := ctxzap.Extract(ctx)
@@ -123,6 +125,7 @@ func New(ctx context.Context, hostname, username, password, apiToken string) (*G
 	}
 
 	return &Grafana{
-		client: grafanaClient,
+		client:   grafanaClient,
+		syncOrgs: syncOrgs,
 	}, nil
 }

@@ -8,6 +8,8 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 )
 
 // On OSS every /api/access-control path answers 404, so each RBAC call maps it
@@ -28,16 +30,13 @@ func TestRBACEndpointsMapNotFoundToUnavailable(t *testing.T) {
 	}
 	ctx := context.Background()
 
-	if _, err := client.ListRoles(ctx); !errors.Is(err, ErrRBACUnavailable) {
+	if _, _, err := client.ListRoles(ctx); !errors.Is(err, ErrRBACUnavailable) {
 		t.Fatalf("ListRoles: %v", err)
 	}
-	if _, err := client.ListTeamRoles(ctx, 7); !errors.Is(err, ErrRBACUnavailable) {
-		t.Fatalf("ListTeamRoles: %v", err)
-	}
-	if _, err := client.ListRolesForTeams(ctx, []int{7}); !errors.Is(err, ErrRBACUnavailable) {
+	if _, _, err := client.ListRolesForTeams(ctx, []int{7}); !errors.Is(err, ErrRBACUnavailable) {
 		t.Fatalf("ListRolesForTeams: %v", err)
 	}
-	if calls != 3 {
+	if calls != 2 {
 		t.Fatalf("expected one call per method, got %d", calls)
 	}
 }
@@ -57,7 +56,7 @@ func TestRBACEndpointsServerErrorIsNotUnavailable(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	_, err = client.ListRolesForTeams(context.Background(), []int{7})
+	_, _, err = client.ListRolesForTeams(context.Background(), []int{7})
 	if err == nil {
 		t.Fatal("expected error on 500")
 	}
@@ -102,7 +101,7 @@ func TestListRolesForTeams(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	got, err := client.ListRolesForTeams(context.Background(), []int{2, 9})
+	got, _, err := client.ListRolesForTeams(context.Background(), []int{2, 9})
 	if err != nil {
 		t.Fatalf("ListRolesForTeams: %v", err)
 	}
@@ -113,7 +112,7 @@ func TestListRolesForTeams(t *testing.T) {
 		t.Fatalf("team 9 roles=%v ok=%v", roles, ok)
 	}
 
-	empty, err := client.ListRolesForTeams(context.Background(), nil)
+	empty, _, err := client.ListRolesForTeams(context.Background(), nil)
 	if err != nil {
 		t.Fatalf("empty ListRolesForTeams: %v", err)
 	}
@@ -122,45 +121,48 @@ func TestListRolesForTeams(t *testing.T) {
 	}
 }
 
-func TestRemoveRoleFromTeamNotFoundDiscrimination(t *testing.T) {
+// ListTeams owns the vendor's 1-based paging: an unset page is normalized to 1
+// and a full page yields the next page as a token string.
+func TestListTeamsNormalizesPageAndReturnsToken(t *testing.T) {
+	t.Parallel()
+
+	var gotQuery string
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/roles/missing"):
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusNotFound)
-			_ = json.NewEncoder(w).Encode(map[string]string{"message": "Team role not found."})
-		case r.Method == http.MethodDelete && strings.HasSuffix(r.URL.Path, "/roles/other"):
-			w.Header().Set("Content-Type", "application/json")
-			w.WriteHeader(http.StatusNotFound)
-			_ = json.NewEncoder(w).Encode(map[string]string{"message": "Team not found"})
-		default:
-			http.NotFound(w, r)
+		if r.URL.Path != "/api/teams/search" {
+			t.Errorf("path=%s", r.URL.Path)
 		}
+		gotQuery = r.URL.RawQuery
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"totalCount": 2,
+			"teams": []map[string]any{
+				{"id": 1, "uid": "t1", "name": "team-a", "orgId": 1},
+				{"id": 2, "uid": "t2", "name": "team-b", "orgId": 1},
+			},
+		})
 	}))
-	defer ts.Close()
+	t.Cleanup(ts.Close)
 
 	client, err := NewClient(context.Background(), ts.URL, "", "", "token")
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	err = client.RemoveRoleFromTeam(context.Background(), 7, "missing")
-	if !errors.Is(err, ErrTeamRoleNotFound) {
-		t.Fatalf("missing assignment: %v", err)
+	teams, next, annos, err := client.ListTeams(context.Background(), &PaginationVars{Size: 2})
+	if err != nil {
+		t.Fatalf("ListTeams: %v", err)
 	}
-	if errors.Is(err, ErrRBACUnavailable) {
-		t.Fatal("assignment-missing 404 must not map to ErrRBACUnavailable")
+	if len(teams) != 2 || teams[0].Name != "team-a" {
+		t.Fatalf("teams=%v", teams)
 	}
-
-	err = client.RemoveRoleFromTeam(context.Background(), 7, "other")
-	if err == nil {
-		t.Fatal("expected error for non-assignment 404")
+	if !strings.Contains(gotQuery, "page=1") {
+		t.Fatalf("query=%q, want page normalized to 1", gotQuery)
 	}
-	if errors.Is(err, ErrTeamRoleNotFound) {
-		t.Fatal("team-not-found must not map to ErrTeamRoleNotFound")
+	if next != "2" {
+		t.Fatalf("nextPage=%q, want %q", next, "2")
 	}
-	if errors.Is(err, ErrRBACUnavailable) {
-		t.Fatal("team-not-found must not map to ErrRBACUnavailable")
+	if !annos.Contains(&v2.RateLimitDescription{}) {
+		t.Fatal("ListTeams must return rate-limit annotations")
 	}
 }
 
@@ -215,15 +217,18 @@ func TestListServiceAccountsAcceptsObjectAndArray(t *testing.T) {
 				t.Fatalf("NewClient: %v", err)
 			}
 
-			accounts, next, err := client.ListServiceAccounts(context.Background(), &PaginationVars{Page: 1, Size: 100})
+			accounts, next, annos, err := client.ListServiceAccounts(context.Background(), &PaginationVars{Page: 1, Size: 100})
 			if err != nil {
 				t.Fatalf("ListServiceAccounts: %v", err)
 			}
 			if len(accounts) != tc.want {
 				t.Fatalf("got %d accounts, want %d", len(accounts), tc.want)
 			}
-			if next != 0 {
-				t.Fatalf("nextPage=%d, want 0", next)
+			if next != "" {
+				t.Fatalf("nextPage=%q, want empty", next)
+			}
+			if !annos.Contains(&v2.RateLimitDescription{}) {
+				t.Fatal("ListServiceAccounts must return rate-limit annotations")
 			}
 		})
 	}
@@ -278,12 +283,15 @@ func TestListRolesAcceptsArrayAndObjectWrapper(t *testing.T) {
 				t.Fatalf("NewClient: %v", err)
 			}
 
-			roles, err := client.ListRoles(context.Background())
+			roles, annos, err := client.ListRoles(context.Background())
 			if err != nil {
 				t.Fatalf("ListRoles: %v", err)
 			}
 			if len(roles) != tc.want {
 				t.Fatalf("got %d roles, want %d", len(roles), tc.want)
+			}
+			if !annos.Contains(&v2.RateLimitDescription{}) {
+				t.Fatal("ListRoles must return rate-limit annotations")
 			}
 		})
 	}
@@ -301,7 +309,7 @@ func TestListRolesRejectsUnknownObject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewClient: %v", err)
 	}
-	if _, err := client.ListRoles(context.Background()); err == nil {
+	if _, _, err := client.ListRoles(context.Background()); err == nil {
 		t.Fatal("expected error for unrecognized object shape")
 	}
 }

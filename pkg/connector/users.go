@@ -94,23 +94,26 @@ func (u *userBuilder) List(ctx context.Context, _ *v2.ResourceId, pToken *pagina
 // listCloud fetches all members of the current org via GET /api/org/users (no pagination).
 // ID stability: UserByOrgResponse.ID (json:"userId") == User.ID — same numeric Grafana user ID.
 func (u *userBuilder) listCloud(ctx context.Context) ([]*v2.Resource, string, annotations.Annotations, error) {
-	orgUsers, err := u.client.ListCurrentOrgUsers(ctx)
+	orgUsers, annos, err := u.client.ListCurrentOrgUsers(ctx)
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("grafana-connector: cloud: failed to list current org users: %w", err)
+		return nil, "", annos, fmt.Errorf("grafana-connector: cloud: failed to list current org users: %w", err)
 	}
 
 	resources := make([]*v2.Resource, 0, len(orgUsers))
 	for _, orgUser := range orgUsers {
+		if orgUser == nil {
+			continue
+		}
 		user := orgUser.ToUser() // ID preserved: UserByOrgResponse.ID (userId) → User.ID
 		ur, err := userResource(&user)
 		if err != nil {
-			return nil, "", nil, fmt.Errorf("grafana-connector: cloud: failed to create user resource: %w", err)
+			return nil, "", annos, fmt.Errorf("grafana-connector: cloud: failed to create user resource: %w", err)
 		}
 		resources = append(resources, ur)
 	}
 
 	// No pagination — endpoint returns all members in a single response
-	return resources, "", nil, nil
+	return resources, "", annos, nil
 }
 
 // listSelfHosted is the original List logic for self-hosted Grafana — unchanged.
@@ -121,47 +124,38 @@ func (u *userBuilder) listSelfHosted(ctx context.Context, pToken *pagination.Tok
 		return nil, "", nil, fmt.Errorf("failed to parse page token: %w", err)
 	}
 
-	// GET /api/users is 1-based and treats page=0 as page=1. Normalize the
-	// initial token so each page is requested exactly once.
-	if page == 0 {
-		page = 1
-	}
-
 	paginationOpts := grafana.PaginationVars{
 		Size: ResourcesPageSize,
 		Page: page,
 	}
 
-	// Fetch users from Grafana
-	users, numNextPage, err := u.client.ListUsers(ctx, &paginationOpts)
+	// Fetch users from Grafana. The client normalizes 1-based paging.
+	users, nextPage, annos, err := u.client.ListUsers(ctx, &paginationOpts)
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("grafana-connector: failed to list users: %w", err)
+		return nil, "", annos, fmt.Errorf("grafana-connector: failed to list users: %w", err)
 	}
 
-	// Generate next page token
-	var pageToken string
-	if numNextPage > 0 {
-		pageToken = strconv.FormatUint(numNextPage, 10)
-	}
-
-	next, err := bag.NextToken(pageToken)
+	next, err := bag.NextToken(nextPage)
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("failed to generate next token: %w", err)
+		return nil, "", annos, fmt.Errorf("failed to generate next token: %w", err)
 	}
 
 	resources := make([]*v2.Resource, 0, len(users))
 
 	// Convert users to resources
 	for _, user := range users {
+		if user == nil {
+			continue
+		}
 		// Self-hosted global /api/users omits the native flag — is_externally_synced is omitted.
-		ur, err := userResource(&user)
+		ur, err := userResource(user)
 		if err != nil {
-			return nil, "", nil, fmt.Errorf("failed to create resource for user %s: %w", user.Email, err)
+			return nil, "", annos, fmt.Errorf("failed to create resource for user %s: %w", user.Email, err)
 		}
 		resources = append(resources, ur)
 	}
 
-	return resources, next, nil, nil
+	return resources, next, annos, nil
 }
 
 // Entitlements returns an empty list for users.

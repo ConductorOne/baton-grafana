@@ -14,7 +14,6 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func TestTeamListAndMemberGrants(t *testing.T) {
@@ -118,7 +117,7 @@ func TestTeamAndServiceAccountPagination(t *testing.T) {
 			name: "service accounts",
 			path: "/api/serviceaccounts/search",
 			run: func(t *testing.T, ts *httptest.Server) {
-				builder := newServiceAccountBuilder(newCloudClientForTest(t, ts))
+				builder := newServiceAccountBuilder(newCloudClientForTest(t, ts), true)
 				token := &pagination.Token{}
 				var ids []string
 				for {
@@ -203,7 +202,6 @@ func TestTeamAndServiceAccountPagination(t *testing.T) {
 		})
 	}
 }
-
 func TestTeamGrantIdempotent(t *testing.T) {
 	var addCalls int
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -380,8 +378,8 @@ func TestRoleStaticEntitlements(t *testing.T) {
 	if static[0].Slug != roleAssignedEntitlement {
 		t.Fatalf("slug=%q want %q", static[0].Slug, roleAssignedEntitlement)
 	}
-	if len(static[0].GrantableTo) != 1 || static[0].GrantableTo[0].Id != resourceTypeTeam.Id {
-		t.Fatalf("grantable_to=%v", static[0].GrantableTo)
+	if len(static[0].GrantableTo) != 0 {
+		t.Fatalf("role assignments are sync-only; grantable_to must be empty, got %v", static[0].GrantableTo)
 	}
 
 	roleTypeAnnos := annotations.Annotations(resourceTypeRole.Annotations)
@@ -432,154 +430,6 @@ func TestTeamStaticEntitlements(t *testing.T) {
 	}
 }
 
-func TestRoleGrantAlreadyExistsViaPreread(t *testing.T) {
-	var postCalls int
-	var listRolesCalls int
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/api/access-control/roles" && r.Method == http.MethodGet:
-			listRolesCalls++
-			writeJSON(w, http.StatusOK, []map[string]any{
-				{"uid": "plugins_SiUG", "name": "plugins:grafana-irm-app:schedules-editor", "displayName": "Schedules Editor"},
-			})
-		case r.URL.Path == "/api/access-control/teams/7/roles" && r.Method == http.MethodGet:
-			writeJSON(w, http.StatusOK, []map[string]any{
-				{"uid": "plugins_SiUG", "name": "plugins:grafana-irm-app:schedules-editor"},
-			})
-		case r.URL.Path == "/api/access-control/teams/7/roles" && r.Method == http.MethodPost:
-			postCalls++
-			writeJSON(w, http.StatusOK, map[string]string{"message": "Role added to the team."})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer ts.Close()
-
-	profile, err := structpb.NewStruct(map[string]any{
-		profileKeyUID: "plugins_SiUG",
-	})
-	if err != nil {
-		t.Fatalf("structpb: %v", err)
-	}
-
-	annos, err := newRoleBuilder(newCloudClientForTest(t, ts)).Grant(
-		context.Background(),
-		&v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
-		&v2.Entitlement{
-			Resource: &v2.Resource{
-				Id: &v2.ResourceId{
-					ResourceType: resourceTypeRole.Id,
-					Resource:     "plugins:grafana-irm-app:schedules-editor",
-				},
-				Profile: profile,
-			},
-		},
-	)
-	if err != nil {
-		t.Fatalf("Grant: %v", err)
-	}
-	if listRolesCalls != 0 {
-		t.Fatalf("expected assignment pre-read to avoid ListRoles, got %d calls", listRolesCalls)
-	}
-	if postCalls != 0 {
-		t.Fatalf("expected no POST when already assigned, got %d", postCalls)
-	}
-	if !annos.Contains(&v2.GrantAlreadyExists{}) {
-		t.Fatal("expected GrantAlreadyExists")
-	}
-}
-
-func TestRoleGrantUsesCurrentUID(t *testing.T) {
-	var postedUID string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/api/access-control/teams/7/roles" && r.Method == http.MethodGet:
-			writeJSON(w, http.StatusOK, []map[string]any{})
-		case r.URL.Path == "/api/access-control/roles" && r.Method == http.MethodGet:
-			writeJSON(w, http.StatusOK, []map[string]any{
-				{"uid": "current-uid", "name": "plugins:grafana-irm-app:schedules-editor"},
-			})
-		case r.URL.Path == "/api/access-control/teams/7/roles" && r.Method == http.MethodPost:
-			var body map[string]any
-			if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
-				t.Fatalf("decode body: %v", err)
-			}
-			postedUID, _ = body["roleUid"].(string)
-			writeJSON(w, http.StatusOK, map[string]string{"message": "Role added to the team."})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer ts.Close()
-
-	staleProfile, err := structpb.NewStruct(map[string]any{profileKeyUID: "stale-uid"})
-	if err != nil {
-		t.Fatalf("structpb: %v", err)
-	}
-
-	_, err = newRoleBuilder(newCloudClientForTest(t, ts)).Grant(
-		context.Background(),
-		&v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
-		&v2.Entitlement{Resource: &v2.Resource{
-			Id:      &v2.ResourceId{ResourceType: resourceTypeRole.Id, Resource: "plugins:grafana-irm-app:schedules-editor"},
-			Profile: staleProfile,
-		}},
-	)
-	if err != nil {
-		t.Fatalf("Grant: %v", err)
-	}
-	if postedUID != "current-uid" {
-		t.Fatalf("posted roleUid=%q want current-uid", postedUID)
-	}
-}
-
-func TestRoleGrantRejectsOutOfCatalogRole(t *testing.T) {
-	_, err := newRoleBuilder(nil).Grant(
-		context.Background(),
-		&v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
-		&v2.Entitlement{Resource: &v2.Resource{
-			Id: &v2.ResourceId{ResourceType: resourceTypeRole.Id, Resource: "fixed:reports:reader"},
-		}},
-	)
-	if err == nil {
-		t.Fatal("expected out-of-catalog role grant to fail")
-	}
-}
-
-func TestRoleGrantRejectsHiddenRole(t *testing.T) {
-	var postCalls int
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.URL.Path == "/api/access-control/teams/7/roles" && r.Method == http.MethodGet:
-			writeJSON(w, http.StatusOK, []map[string]any{})
-		case r.URL.Path == "/api/access-control/roles" && r.Method == http.MethodGet:
-			writeJSON(w, http.StatusOK, []map[string]any{
-				{"uid": "hidden-uid", "name": "plugins:grafana-irm-app:admin", "hidden": true},
-			})
-		case r.URL.Path == "/api/access-control/teams/7/roles" && r.Method == http.MethodPost:
-			postCalls++
-			writeJSON(w, http.StatusOK, map[string]string{"message": "Role added to the team."})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer ts.Close()
-
-	_, err := newRoleBuilder(newCloudClientForTest(t, ts)).Grant(
-		context.Background(),
-		&v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
-		&v2.Entitlement{Resource: &v2.Resource{
-			Id: &v2.ResourceId{ResourceType: resourceTypeRole.Id, Resource: "plugins:grafana-irm-app:admin"},
-		}},
-	)
-	if err == nil {
-		t.Fatal("expected hidden role grant to fail")
-	}
-	if postCalls != 0 {
-		t.Fatalf("postCalls=%d want 0", postCalls)
-	}
-}
-
 func TestServiceAccountListAndOrgGrant(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/serviceaccounts/search" {
@@ -600,7 +450,7 @@ func TestServiceAccountListAndOrgGrant(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	builder := newServiceAccountBuilder(newCloudClientForTest(t, ts))
+	builder := newServiceAccountBuilder(newCloudClientForTest(t, ts), true)
 	resources, _, _, err := builder.List(context.Background(), nil, &pagination.Token{})
 	if err != nil {
 		t.Fatalf("List: %v", err)
@@ -657,79 +507,23 @@ func TestServiceAccountListAndOrgGrant(t *testing.T) {
 	}
 }
 
-func TestRoleRevokeIdempotent(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/access-control/teams/7/roles":
-			writeJSON(w, http.StatusOK, []map[string]any{
-				{"uid": "plugins_SiUG", "name": "plugins:grafana-irm-app:schedules-editor"},
-			})
-		case r.Method == http.MethodDelete && r.URL.Path == "/api/access-control/teams/7/roles/plugins_SiUG":
-			writeJSON(w, http.StatusNotFound, map[string]string{"message": "Team role not found."})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer ts.Close()
+func TestServiceAccountSkipsOrgGrantsWhenOrgNotSynced(t *testing.T) {
+	builder := newServiceAccountBuilder(nil, false)
 
-	profile, err := structpb.NewStruct(map[string]any{profileKeyUID: "stale-uid"})
-	if err != nil {
-		t.Fatalf("structpb: %v", err)
+	rt := builder.ResourceType(context.Background())
+	annos := annotations.Annotations(rt.Annotations)
+	if !annos.Contains(&v2.SkipEntitlementsAndGrants{}) {
+		t.Fatal("when org is excluded from sync, SA type must SkipEntitlementsAndGrants")
 	}
 
-	annos, err := newRoleBuilder(newCloudClientForTest(t, ts)).Revoke(context.Background(), &v2.Grant{
-		Principal: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
-		Entitlement: &v2.Entitlement{
-			Resource: &v2.Resource{
-				Id: &v2.ResourceId{
-					ResourceType: resourceTypeRole.Id,
-					Resource:     "plugins:grafana-irm-app:schedules-editor",
-				},
-				Profile: profile,
-			},
-		},
-	})
+	grants, _, _, err := builder.Grants(context.Background(), &v2.Resource{
+		Id: &v2.ResourceId{ResourceType: resourceTypeServiceAccount.Id, Resource: "1"},
+	}, &pagination.Token{})
 	if err != nil {
-		t.Fatalf("Revoke: %v", err)
+		t.Fatalf("Grants: %v", err)
 	}
-	if !annos.Contains(&v2.GrantAlreadyRevoked{}) {
-		t.Fatal("expected GrantAlreadyRevoked")
-	}
-}
-
-func TestRoleRevokeUsesCurrentUID(t *testing.T) {
-	var deletedPath string
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodGet && r.URL.Path == "/api/access-control/teams/7/roles":
-			writeJSON(w, http.StatusOK, []map[string]any{
-				{"uid": "current-uid", "name": "plugins:grafana-irm-app:schedules-editor"},
-			})
-		case r.Method == http.MethodDelete:
-			deletedPath = r.URL.Path
-			writeJSON(w, http.StatusOK, map[string]string{"message": "Team role removed"})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	defer ts.Close()
-
-	staleProfile, err := structpb.NewStruct(map[string]any{profileKeyUID: "stale-uid"})
-	if err != nil {
-		t.Fatalf("structpb: %v", err)
-	}
-	_, err = newRoleBuilder(newCloudClientForTest(t, ts)).Revoke(context.Background(), &v2.Grant{
-		Principal: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
-		Entitlement: &v2.Entitlement{Resource: &v2.Resource{
-			Id:      &v2.ResourceId{ResourceType: resourceTypeRole.Id, Resource: "plugins:grafana-irm-app:schedules-editor"},
-			Profile: staleProfile,
-		}},
-	})
-	if err != nil {
-		t.Fatalf("Revoke: %v", err)
-	}
-	if deletedPath != "/api/access-control/teams/7/roles/current-uid" {
-		t.Fatalf("deletedPath=%q", deletedPath)
+	if len(grants) != 0 {
+		t.Fatalf("expected no SA→org grants when org is not synced, got %d", len(grants))
 	}
 }
 
@@ -853,6 +647,9 @@ func TestRoleGrantsForResourceTypeEmitsTeamRoleGrants(t *testing.T) {
 	}
 	if !expandable.Shallow {
 		t.Fatal("expected GrantExpandable.Shallow=true")
+	}
+	if !annos.Contains(&v2.GrantImmutable{}) {
+		t.Fatal("team→role grants must be GrantImmutable (C1 cannot provision non-user principals)")
 	}
 	wantMemberEnt := ent.NewEntitlementID(
 		&v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
@@ -1006,37 +803,5 @@ func TestRoleGrantsForResourceTypeFailsClosed(t *testing.T) {
 				t.Fatalf("expected team-roles search %d to fail GrantsForResourceType", code)
 			}
 		})
-	}
-}
-
-func TestRoleRevokeOSSUnavailable(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodDelete && r.URL.Path == "/api/access-control/teams/7/roles/plugins_SiUG" {
-			writeJSON(w, http.StatusNotFound, map[string]string{"message": "Not found"})
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	defer ts.Close()
-
-	profile, err := structpb.NewStruct(map[string]any{profileKeyUID: "plugins_SiUG"})
-	if err != nil {
-		t.Fatalf("structpb: %v", err)
-	}
-
-	_, err = newRoleBuilder(newCloudClientForTest(t, ts)).Revoke(context.Background(), &v2.Grant{
-		Principal: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
-		Entitlement: &v2.Entitlement{
-			Resource: &v2.Resource{
-				Id: &v2.ResourceId{
-					ResourceType: resourceTypeRole.Id,
-					Resource:     "plugins:grafana-irm-app:schedules-editor",
-				},
-				Profile: profile,
-			},
-		},
-	})
-	if err == nil {
-		t.Fatal("expected Revoke to error on OSS-style 404")
 	}
 }

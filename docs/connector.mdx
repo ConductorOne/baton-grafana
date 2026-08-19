@@ -13,15 +13,15 @@ sidebarTitle: "Grafana"
 | Accounts | <Icon icon="square-check" iconType="solid" color="#c937ae"/> | <Icon icon="square-check" iconType="solid" color="#c937ae"/> |
 | Organizations | <Icon icon="square-check" iconType="solid" color="#c937ae"/> | <Icon icon="square-check" iconType="solid" color="#c937ae"/> |
 | Teams | <Icon icon="square-check" iconType="solid" color="#c937ae"/> | <Icon icon="square-check" iconType="solid" color="#c937ae"/> |
-| Roles | <Icon icon="square-check" iconType="solid" color="#c937ae"/> | <Icon icon="square-check" iconType="solid" color="#c937ae"/> |
+| Roles | <Icon icon="square-check" iconType="solid" color="#c937ae"/> | |
 | Service accounts | <Icon icon="square-check" iconType="solid" color="#c937ae"/> | |
 
-Team membership can be granted and revoked (`/api/teams/{id}/members`). Grafana RBAC roles that a team holds are synced and can be assigned to or removed from a team (`/api/access-control/teams/{id}/roles`); the connector syncs the IRM and OnCall plugin roles (for example **Schedules Editor**), which require Grafana Cloud or Enterprise. Service accounts are synced with their organization role; they are read-only.
+Team membership can be granted and revoked. Grafana RBAC roles that a team holds (IRM and OnCall plugin roles such as **Schedules Editor**) are synced as read-only assignments and require Grafana Cloud or Enterprise. Service accounts are synced with their organization role; they are read-only.
 
 <Note>
 **Roles are optional**
 
-IRM / OnCall RBAC roles are available only on Grafana Cloud and Enterprise. Role sync is disabled by default — enable the **Role** resource type in the connector's settings in C1 when your instance has access-control. Teams and service accounts sync by default.
+IRM / OnCall RBAC roles are available only on Grafana Cloud and Enterprise. Role sync is disabled by default — enable the **Role** resource type in the connector's settings in C1 when your instance has access-control.
 </Note>
 
 The Grafana connector supports both **self-hosted Grafana** instances and **Grafana Cloud**. The required credentials and provisioning behavior differ between the two — see [Gather Grafana credentials](#gather-grafana-credentials) below.
@@ -94,7 +94,7 @@ To create a service account token:
 3. Open the new service account and click **Add service account token**.
 4. Copy and save the generated token — it will not be shown again.
 
-The connector always syncs teams and service accounts (in addition to orgs and users). Opting in to the RBAC **role** resource type also requires access-control read/write for IRM/OnCall role assignments. Use an **Admin** service-account role (or equivalent permissions covering `teams:read`, `serviceaccounts:read`, and when opted in `roles:read` / team role assignment). A narrower token that previously synced only users/orgs may fail List after this upgrade.
+Use an **Admin** service-account role (or equivalent permissions covering `teams:read`, `serviceaccounts:read`, and when Role sync is enabled `roles:read`). A narrower token that previously synced only users/orgs may fail List after this upgrade.
 
 You will need:
 

@@ -1,14 +1,5 @@
 package grafana
 
-import (
-	"bytes"
-	"encoding/json"
-	"fmt"
-	"net/url"
-
-	"github.com/conductorone/baton-sdk/pkg/uhttp"
-)
-
 // GrafanaError represents an error response from the Grafana API.
 type GrafanaError struct {
 	ErrorMessage string `json:"message"`
@@ -21,16 +12,6 @@ func (e *GrafanaError) Message() string {
 		return e.ErrorMessage
 	}
 	return "Unknown error from Grafana API"
-}
-
-// Client represents a Grafana API client.
-type Client struct {
-	httpClient *uhttp.BaseHttpClient
-	baseUrl    *url.URL
-
-	username string
-	password string
-	apiToken string // non-empty = Cloud mode (Bearer auth)
 }
 
 type Organization struct {
@@ -133,10 +114,10 @@ type Team struct {
 
 // TeamSearchResponse is the paginated payload from GET /api/teams/search.
 type TeamSearchResponse struct {
-	TotalCount int    `json:"totalCount"`
-	Teams      []Team `json:"teams"`
-	Page       int    `json:"page"`
-	PerPage    int    `json:"perPage"`
+	TotalCount int     `json:"totalCount"`
+	Teams      []*Team `json:"teams"`
+	Page       int     `json:"page"`
+	PerPage    int     `json:"perPage"`
 }
 
 // TeamMember is a member of a Grafana team from GET /api/teams/:id/members.
@@ -173,34 +154,10 @@ type ServiceAccount struct {
 // Live Grafana returns an object with a serviceAccounts array. Some mocks (and
 // older servers) return a bare JSON array; UnmarshalJSON accepts both.
 type ServiceAccountSearchResponse struct {
-	TotalCount      int              `json:"totalCount"`
-	ServiceAccounts []ServiceAccount `json:"serviceAccounts"`
-	Page            int              `json:"page"`
-	PerPage         int              `json:"perPage"`
-}
-
-func (r *ServiceAccountSearchResponse) UnmarshalJSON(data []byte) error {
-	trimmed := bytes.TrimSpace(data)
-	if len(trimmed) == 0 {
-		return fmt.Errorf("empty service account search response")
-	}
-	if trimmed[0] == '[' {
-		var accounts []ServiceAccount
-		if err := json.Unmarshal(trimmed, &accounts); err != nil {
-			return err
-		}
-		r.ServiceAccounts = accounts
-		r.TotalCount = len(accounts)
-		return nil
-	}
-
-	type alias ServiceAccountSearchResponse
-	var wrapped alias
-	if err := json.Unmarshal(trimmed, &wrapped); err != nil {
-		return err
-	}
-	*r = ServiceAccountSearchResponse(wrapped)
-	return nil
+	TotalCount      int               `json:"totalCount"`
+	ServiceAccounts []*ServiceAccount `json:"serviceAccounts"`
+	Page            int               `json:"page"`
+	PerPage         int               `json:"perPage"`
 }
 
 // Role is a Grafana RBAC role from GET /api/access-control/roles.
@@ -218,41 +175,7 @@ type Role struct {
 // rolesListResponse decodes GET /api/access-control/roles. Live Grafana returns
 // a JSON array. Some mocks redirect the list path into a role-detail wrapper
 // object ({"permissions":[]}); treat that as an empty catalog.
-type rolesListResponse []Role
-
-func (r *rolesListResponse) UnmarshalJSON(data []byte) error {
-	trimmed := bytes.TrimSpace(data)
-	if len(trimmed) == 0 {
-		*r = nil
-		return nil
-	}
-	if trimmed[0] == '[' {
-		var roles []Role
-		if err := json.Unmarshal(trimmed, &roles); err != nil {
-			return err
-		}
-		*r = roles
-		return nil
-	}
-	// Nested role-detail mocks redirect the list path and return
-	// {"permissions":[…], …}. That is not a role catalog.
-	var probe struct {
-		Permissions json.RawMessage `json:"permissions"`
-	}
-	if err := json.Unmarshal(trimmed, &probe); err != nil {
-		return err
-	}
-	if probe.Permissions == nil {
-		return fmt.Errorf("unexpected roles list object")
-	}
-	*r = nil
-	return nil
-}
-
-// AssignRoleToTeamRequest is the body for POST /api/access-control/teams/:id/roles.
-type AssignRoleToTeamRequest struct {
-	RoleUID string `json:"roleUid"`
-}
+type rolesListResponse []*Role
 
 // ListRolesForTeamsRequest is the body for
 // POST /api/access-control/teams/roles/search.

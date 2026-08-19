@@ -133,11 +133,10 @@ Show permissions available in Grafana:
 
 - **Users** – Lists all users in Grafana, including their roles.
 - **Organizations** – Details organizations and corresponding access grants.
-- **Teams** – Grafana teams and their members, plus the RBAC roles each team holds.
+- **Teams** – Grafana teams and their members.
 - **Roles** *(optional)* – Grafana RBAC roles for the IRM and OnCall plugins (for example
-  Schedules Editor). Requires Grafana Cloud or Enterprise. Role sync is opt-in because
-  the access-control API is absent on OSS; enabling it where RBAC is unavailable fails
-  rather than replacing prior roles with an empty result.
+  Schedules Editor), including which teams hold those roles. Requires Grafana Cloud or
+  Enterprise; enable the Role resource type in C1 when your instance has access-control.
 - **Service accounts** – Grafana service accounts and their organization role.
 
 This information provides insight into user access management in Grafana.
@@ -163,8 +162,9 @@ This information provides insight into user access management in Grafana.
 Beyond accounts, `baton-grafana` supports granting and revoking:
 
 - **Organization roles** – Admin / Editor / Viewer on an organization.
-- **Team membership** – add/remove a user on a team (`POST`/`DELETE /api/teams/{id}/members`).
-- **Team RBAC roles** – assign/remove an RBAC role on a team (`POST`/`DELETE /api/access-control/teams/{id}/roles`); Grafana Cloud / Enterprise only.
+- **Team membership** – add/remove a user on a team.
+
+RBAC roles and service accounts are **read-only** (synced, not provisioned).
 
 ---
 
