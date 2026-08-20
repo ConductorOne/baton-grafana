@@ -297,6 +297,56 @@ func TestListRolesAcceptsArrayAndObjectWrapper(t *testing.T) {
 	}
 }
 
+func TestCreateUserAlreadyExistsMaps412(t *testing.T) {
+	t.Parallel()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/admin/users" || r.Method != http.MethodPost {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusPreconditionFailed)
+		_ = json.NewEncoder(w).Encode(map[string]string{
+			"message": "User with email 'e2euser@example.com' or username 'e2euser' already exists",
+		})
+	}))
+	t.Cleanup(ts.Close)
+
+	client, err := NewClient(context.Background(), ts.URL, "admin", "admin", "")
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	_, _, err = client.CreateUser(context.Background(), &CreateUserRequest{
+		Name: "e2euser", Email: "e2euser@example.com", Login: "e2euser", Password: "secret",
+	})
+	if !errors.Is(err, ErrUserAlreadyExists) {
+		t.Fatalf("412 must map to ErrUserAlreadyExists, got %v", err)
+	}
+}
+
+func TestCreateUserNon412InvalidArgumentIsNotAlreadyExists(t *testing.T) {
+	t.Parallel()
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		_ = json.NewEncoder(w).Encode(map[string]string{"message": "invalid password"})
+	}))
+	t.Cleanup(ts.Close)
+
+	client, err := NewClient(context.Background(), ts.URL, "admin", "admin", "")
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	_, _, err = client.CreateUser(context.Background(), &CreateUserRequest{
+		Name: "x", Email: "x@example.com", Login: "x", Password: "secret",
+	})
+	if err == nil {
+		t.Fatal("expected error")
+	}
+	if errors.Is(err, ErrUserAlreadyExists) {
+		t.Fatal("400 must not map to ErrUserAlreadyExists")
+	}
+}
+
 func TestListRolesRejectsUnknownObject(t *testing.T) {
 	t.Parallel()
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {

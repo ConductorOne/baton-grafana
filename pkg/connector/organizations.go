@@ -245,7 +245,8 @@ func (o *orgBuilder) grantCloud(ctx context.Context, l *zap.Logger, userID, orgI
 		}
 		if cu.Role == role {
 			// Already has the requested role
-			return annotations.New(&v2.GrantAlreadyExists{}), nil
+			listAnnos.Update(&v2.GrantAlreadyExists{})
+			return listAnnos, nil
 		}
 		// Role differs — update via PATCH (single call, no remove+re-add)
 		l.Debug("Cloud mode: updating user role via PATCH", zap.Int("user_id", userID), zap.String("new_role", role))
@@ -377,7 +378,8 @@ func (o *orgBuilder) revokeCloud(ctx context.Context, l *zap.Logger, userID, org
 	}
 
 	if !found {
-		return annotations.New(&v2.GrantAlreadyRevoked{}), nil
+		listAnnos.Update(&v2.GrantAlreadyRevoked{})
+		return listAnnos, nil
 	}
 
 	annos, err := o.client.RemoveCurrentOrgUser(ctx, userID)

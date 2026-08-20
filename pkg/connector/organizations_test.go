@@ -154,8 +154,11 @@ func TestGrantCloud_IdempotentWhenSameRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Grant returned unexpected error: %v", err)
 	}
-	if len(annos) == 0 {
+	if !annos.Contains(&v2.GrantAlreadyExists{}) {
 		t.Error("expected GrantAlreadyExists annotation, got none")
+	}
+	if !annos.Contains(&v2.RateLimitDescription{}) {
+		t.Error("idempotent Cloud grant must keep rate-limit annotations from ListCurrentOrgUsers")
 	}
 	if patchCalled {
 		t.Error("PATCH should not be called when user already has the requested role")
@@ -256,8 +259,11 @@ func TestRevokeCloud_IdempotentWhenUserNotInOrg(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Revoke returned unexpected error: %v", err)
 	}
-	if len(annos) == 0 {
+	if !annos.Contains(&v2.GrantAlreadyRevoked{}) {
 		t.Error("expected GrantAlreadyRevoked annotation, got none")
+	}
+	if !annos.Contains(&v2.RateLimitDescription{}) {
+		t.Error("idempotent Cloud revoke must keep rate-limit annotations from ListCurrentOrgUsers")
 	}
 }
 
