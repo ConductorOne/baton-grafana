@@ -34,7 +34,7 @@ func teamResource(team *grafana.Team) (*v2.Resource, error) {
 		profileKeyTeamID:      team.ID,
 		profileKeyUID:         team.UID,
 		profileKeyOrgID:       strconv.Itoa(team.OrgID),
-		profileFieldEmail:     team.Email,
+		profileKeyEmail:       team.Email,
 		profileKeyMemberCount: team.MemberCount,
 	}
 
@@ -131,18 +131,25 @@ func (t *teamBuilder) Grants(ctx context.Context, resource *v2.Resource, _ *pagi
 	return grants, "", annos, nil
 }
 
-func (t *teamBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) (annotations.Annotations, error) {
+func parseTeamMembershipIDs(principal *v2.Resource, teamResourceID string) (int, int, error) {
 	if principal.Id.ResourceType != resourceTypeUser.Id {
-		return nil, status.Errorf(codes.InvalidArgument, "grafana-connector: team membership principal must be a user, got %s", principal.Id.ResourceType)
+		return 0, 0, status.Errorf(codes.InvalidArgument, "grafana-connector: team membership principal must be a user, got %s", principal.Id.ResourceType)
 	}
-
-	teamID, err := strconv.Atoi(entitlement.Resource.Id.Resource)
+	teamID, err := strconv.Atoi(teamResourceID)
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "grafana-connector: invalid team id %q: %v", entitlement.Resource.Id.Resource, err)
+		return 0, 0, status.Errorf(codes.InvalidArgument, "grafana-connector: invalid team id %q: %v", teamResourceID, err)
 	}
 	userID, err := strconv.Atoi(principal.Id.Resource)
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "grafana-connector: invalid user id %q: %v", principal.Id.Resource, err)
+		return 0, 0, status.Errorf(codes.InvalidArgument, "grafana-connector: invalid user id %q: %v", principal.Id.Resource, err)
+	}
+	return teamID, userID, nil
+}
+
+func (t *teamBuilder) Grant(ctx context.Context, principal *v2.Resource, entitlement *v2.Entitlement) (annotations.Annotations, error) {
+	teamID, userID, err := parseTeamMembershipIDs(principal, entitlement.Resource.Id.Resource)
+	if err != nil {
+		return nil, err
 	}
 
 	annos, err := t.client.AddUserToTeam(ctx, teamID, userID)
@@ -158,18 +165,9 @@ func (t *teamBuilder) Grant(ctx context.Context, principal *v2.Resource, entitle
 }
 
 func (t *teamBuilder) Revoke(ctx context.Context, grant *v2.Grant) (annotations.Annotations, error) {
-	principal := grant.Principal
-	if principal.Id.ResourceType != resourceTypeUser.Id {
-		return nil, status.Errorf(codes.InvalidArgument, "grafana-connector: team membership principal must be a user, got %s", principal.Id.ResourceType)
-	}
-
-	teamID, err := strconv.Atoi(grant.Entitlement.Resource.Id.Resource)
+	teamID, userID, err := parseTeamMembershipIDs(grant.Principal, grant.Entitlement.Resource.Id.Resource)
 	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "grafana-connector: invalid team id %q: %v", grant.Entitlement.Resource.Id.Resource, err)
-	}
-	userID, err := strconv.Atoi(principal.Id.Resource)
-	if err != nil {
-		return nil, status.Errorf(codes.InvalidArgument, "grafana-connector: invalid user id %q: %v", principal.Id.Resource, err)
+		return nil, err
 	}
 
 	annos, err := t.client.RemoveUserFromTeam(ctx, teamID, userID)

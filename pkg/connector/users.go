@@ -50,10 +50,10 @@ func (u *userBuilder) ResourceType(_ context.Context) *v2.ResourceType {
 func userResource(user *grafana.User) (*v2.Resource, error) {
 	hasAuthLabels := len(user.AuthLabels) > 0
 	profile := map[string]any{
-		"full_name":       user.Name,
-		profileKeyLogin:   user.Login,
-		"user_id":         user.ID,
-		profileFieldEmail: user.Email,
+		"full_name":     user.Name,
+		profileKeyLogin: user.Login,
+		"user_id":       user.ID,
+		profileKeyEmail: user.Email,
 	}
 	// Surface the native flag only when Grafana returned it; a value we don't have
 	// is omitted rather than derived from a different concept (AuthLabels).

@@ -44,11 +44,12 @@ const (
 	profileKeyIsExternal  = "is_external"
 	profileKeyIsDisabled  = "is_disabled"
 
-	// Shared profile keys. CreateAccount schema fields must use the same strings
-	// so submitted values reach CreateAccount; resource profiles (users, teams)
-	// reuse email for the API email field.
+	// CreateAccount schema keys. Resource profiles use profileKeyEmail for the
+	// Grafana email field (same string value, separate const so team profiles
+	// are not tied to the account-creation schema).
 	profileFieldEmail    = "email"
 	profileFieldFullName = "full_name"
+	profileKeyEmail      = "email"
 )
 
 var userRoles = []string{roleViewer, roleEditor, roleAdmin}

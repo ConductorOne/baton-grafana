@@ -292,8 +292,10 @@ func (c *Client) CreateUser(ctx context.Context, req *CreateUserRequest) (*User,
 		nil,
 	)
 	if err != nil {
-		// Check if this is a 412 Precondition Failed error, which likely means the user already exists
-		if strings.Contains(err.Error(), fmt.Sprintf("%d", http.StatusPreconditionFailed)) {
+		// 412 maps to InvalidArgument (same bucket as 400); keep the status-code
+		// substring so an unrelated 400 is not treated as already-exists.
+		if status.Code(err) == codes.InvalidArgument &&
+			strings.Contains(err.Error(), fmt.Sprintf("%d", http.StatusPreconditionFailed)) {
 			return nil, annos, fmt.Errorf("%w: %w", ErrUserAlreadyExists, err)
 		}
 		return nil, annos, fmt.Errorf("grafana-client: create user: %w", err)
@@ -396,7 +398,7 @@ func (c *Client) InviteUserToOrg(ctx context.Context, req *InviteUserRequest) (*
 		// status (like the 412 check for ErrUserAlreadyExists) plus the message
 		// so an unrelated error carrying the same phrase isn't mis-tagged; a
 		// reworded message just falls through to the generic error below.
-		if strings.Contains(err.Error(), fmt.Sprintf("%d", http.StatusBadRequest)) &&
+		if status.Code(err) == codes.InvalidArgument &&
 			strings.Contains(err.Error(), "login is disabled") {
 			return nil, annos, fmt.Errorf("%w: %w", ErrExternalUserLoginDisabled, err)
 		}

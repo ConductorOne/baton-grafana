@@ -2,6 +2,7 @@ package connector
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -62,6 +63,9 @@ func (r *roleBuilder) List(ctx context.Context, _ *v2.ResourceId, _ *pagination.
 	// so an absent access-control API must fail the sync instead.
 	roles, annos, err := r.client.ListRoles(ctx)
 	if err != nil {
+		if errors.Is(err, grafana.ErrRBACUnavailable) {
+			return nil, "", annos, fmt.Errorf("grafana-connector: Grafana access-control API is unavailable; IRM/OnCall roles require Cloud or Enterprise: %w", err)
+		}
 		return nil, "", annos, fmt.Errorf("grafana-connector: failed to list roles: %w", err)
 	}
 
@@ -152,6 +156,9 @@ func (r *roleBuilder) GrantsForResourceType(ctx context.Context, _ string, opts 
 			// be reachable. A route-absent 404 (or any error) here is not "roles
 			// disabled" — fail closed rather than emit an empty set that C1 would
 			// read as a revoke of every team→role grant.
+			if errors.Is(err, grafana.ErrRBACUnavailable) {
+				return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: Grafana access-control API is unavailable; IRM/OnCall roles require Cloud or Enterprise: %w", err)
+			}
 			return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: failed to list roles for teams: %w", err)
 		}
 
