@@ -76,17 +76,13 @@ func TestListCloud_DisabledUserHasDisabledStatus(t *testing.T) {
 		t.Fatalf("expected 1 resource, got %d", len(resources))
 	}
 
-	userTrait, err := rs.GetUserTrait(resources[0])
-	if err != nil {
-		t.Fatalf("GetUserTrait: %v", err)
-	}
-	if userTrait.GetStatus().GetStatus() != v2.UserTrait_Status_STATUS_DISABLED {
-		t.Errorf("expected STATUS_DISABLED for disabled user, got %v", userTrait.GetStatus().GetStatus())
+	status := rs.GetStatus(resources[0])
+	if status == nil || status.GetStatus() != v2.Status_RESOURCE_STATUS_DISABLED {
+		t.Errorf("expected RESOURCE_STATUS_DISABLED for disabled user, got %v", status)
 	}
 }
 
-// TestCreateAccountCloud_LoginDisabledReturnsActionableError reproduces CXH-2012:
-// a default-configuration Grafana Cloud instance (basic login form disabled) rejects
+// A default Grafana Cloud instance with the basic login form disabled rejects
 // invites for brand-new external users with HTTP 400. The connector must surface an
 // actionable error tagged with grafana.ErrExternalUserLoginDisabled, not an opaque 400.
 func TestCreateAccountCloud_LoginDisabledReturnsActionableError(t *testing.T) {
@@ -118,8 +114,7 @@ func TestCreateAccountCloud_LoginDisabledReturnsActionableError(t *testing.T) {
 	if !strings.Contains(err.Error(), "SCIM") {
 		t.Errorf("expected actionable error mentioning SCIM, got %v", err)
 	}
-	// The failure is a terminal configuration prerequisite: the platform must see
-	// InvalidArgument (non-retryable), not an opaque codes.Unknown from a bare fmt.Errorf.
+	// The failure is a terminal configuration prerequisite, not a transient error.
 	if code := status.Code(err); code != codes.InvalidArgument {
 		t.Errorf("expected gRPC status codes.InvalidArgument, got %v", code)
 	}
@@ -159,19 +154,17 @@ func TestCreateAccountCloud_Non400WithSameMessageIsNotTagged(t *testing.T) {
 
 // TestListCloud_ExternalSyncMirrorsNativeFlag exercises the Cloud List path.
 // The org-users endpoint returns the authoritative native IsExternallySynced
-// flag, so is_externally_synced must mirror it exactly — even though every Cloud user
-// carries authLabels:["grafana.com"]. Before the fix the authLabels OR'd every user to
-// true, hiding instance-managed access. Mirrors the ticket's TTD-shaped mock: two
-// genuinely IdP-synced identities (native true) and two instance-managed admins (native
-// false), all with grafana.com auth labels.
+// flag, so is_externally_synced must mirror it exactly even when every user
+// carries authLabels:["grafana.com"]. The fixture includes both native values
+// with the same auth label to distinguish the two signals.
 func TestListCloud_ExternalSyncMirrorsNativeFlag(t *testing.T) {
 	mux := http.NewServeMux()
 	mux.HandleFunc("/api/org/users", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, []grafana.UserByOrgResponse{
-			{ID: 1, Login: "brad.thater", Email: "brad@ttd.com", Role: roleAdmin, IsExternallySynced: true, AuthLabels: []string{"grafana.com"}},
-			{ID: 2, Login: "svc_scim", Email: "scim@ttd.com", Role: roleAdmin, IsExternallySynced: true, AuthLabels: []string{"grafana.com"}},
-			{ID: 3, Login: "alice.instance", Email: "alice@ttd.com", Role: roleAdmin, IsExternallySynced: false, AuthLabels: []string{"grafana.com"}},
-			{ID: 4, Login: "bob.instance", Email: "bob@ttd.com", Role: roleAdmin, IsExternallySynced: false, AuthLabels: []string{"grafana.com"}},
+			{ID: 1, Login: "brad.thater", Email: "brad@example.com", Role: roleAdmin, IsExternallySynced: true, AuthLabels: []string{"grafana.com"}},
+			{ID: 2, Login: "svc_scim", Email: "scim@example.com", Role: roleAdmin, IsExternallySynced: true, AuthLabels: []string{"grafana.com"}},
+			{ID: 3, Login: "alice.instance", Email: "alice@example.com", Role: roleAdmin, IsExternallySynced: false, AuthLabels: []string{"grafana.com"}},
+			{ID: 4, Login: "bob.instance", Email: "bob@example.com", Role: roleAdmin, IsExternallySynced: false, AuthLabels: []string{"grafana.com"}},
 		})
 	})
 	ts := httptest.NewServer(mux)
@@ -190,11 +183,7 @@ func TestListCloud_ExternalSyncMirrorsNativeFlag(t *testing.T) {
 	// report false even though they carry grafana.com auth labels.
 	want := map[string]bool{"1": true, "2": true, "3": false, "4": false}
 	for _, r := range resources {
-		ut, err := rs.GetUserTrait(r)
-		if err != nil {
-			t.Fatalf("GetUserTrait for %s: %v", r.Id.Resource, err)
-		}
-		fields := ut.GetProfile().GetFields()
+		fields := rs.GetProfile(r).GetFields()
 		if _, present := fields["is_externally_synced"]; !present {
 			t.Errorf("user %s (%s): is_externally_synced missing; Cloud org-users always returns the flag", r.Id.Resource, r.DisplayName)
 			continue
@@ -208,9 +197,9 @@ func TestListCloud_ExternalSyncMirrorsNativeFlag(t *testing.T) {
 // TestListSelfHosted_OmitsExternalSyncFromRawJSON pins the JSON-to-*bool half of the
 // contract that the *bool exists for: it drives the self-hosted List path
 // against a raw /api/users body that OMITS the isExternallySynced key (the real
-// shape — verified against Grafana OSS). The key's absence must decode to a nil
+// shape). The key's absence must decode to a nil
 // pointer, so userResource leaves is_externally_synced off the profile. auth_labels
-// is unaffected — surfaced when present. (QE note on PR #76.)
+// is unaffected and remains present when returned.
 func TestListSelfHosted_OmitsExternalSyncFromRawJSON(t *testing.T) {
 	mux := http.NewServeMux()
 	// Bare /api/users array with NO isExternallySynced key on any object.
@@ -234,11 +223,7 @@ func TestListSelfHosted_OmitsExternalSyncFromRawJSON(t *testing.T) {
 
 	wantAuthLabels := map[string]string{"1": "", "2": "Generic OAuth"}
 	for _, r := range resources {
-		ut, err := rs.GetUserTrait(r)
-		if err != nil {
-			t.Fatalf("GetUserTrait for %s: %v", r.Id.Resource, err)
-		}
-		fields := ut.GetProfile().GetFields()
+		fields := rs.GetProfile(r).GetFields()
 		if _, present := fields["is_externally_synced"]; present {
 			t.Errorf("user %s: is_externally_synced must be absent when /api/users omits the key (nil *bool), got present", r.Id.Resource)
 		}
@@ -248,17 +233,12 @@ func TestListSelfHosted_OmitsExternalSyncFromRawJSON(t *testing.T) {
 	}
 }
 
-// TestListSelfHosted_PaginationNoDoubleFetch reproduces CXH-2013: in self-hosted mode
-// the connector paginated /api/users starting at page=0 and incrementing (nextPage =
-// page+1). Grafana's list endpoints are 1-based and treat page=0 as page one, so page=0
-// and page=1 both returned the first page — the first page was fetched twice, inflating
-// the reported sync count (109 on a 59-user tenant in the ticket) even though the bundle
-// deduped by ID. The fix makes pagination 1-based: page must be requested as 1, 2, 3, …
-// each exactly once.
+// Grafana's /api/users endpoint is 1-based and treats page=0 as page=1.
+// Pagination must therefore request pages 1, 2, 3, … exactly once.
 func TestListSelfHosted_PaginationNoDoubleFetch(t *testing.T) {
 	const (
-		perPage    = int(ResourcesPageSize) // 50
-		totalUsers = 109                    // 50 + 50 + 9 → three pages
+		perPage    = int(ResourcesPageSize)
+		totalUsers = perPage*2 + 9
 	)
 
 	var requestedPages []string
@@ -293,8 +273,7 @@ func TestListSelfHosted_PaginationNoDoubleFetch(t *testing.T) {
 
 	builder := newUserBuilder(newSelfHostedClientForTest(t, ts))
 
-	// Drive the pagination loop the way the SDK does: feed each returned next token back
-	// in until it is empty.
+	// Feed each returned token back into List until it is empty.
 	seen := map[string]bool{}
 	token := &pagination.Token{}
 	pages := 0

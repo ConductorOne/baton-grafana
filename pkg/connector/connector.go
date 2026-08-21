@@ -23,6 +23,9 @@ func (g *Grafana) ResourceSyncers(ctx context.Context) []connectorbuilder.Resour
 	return []connectorbuilder.ResourceSyncer{
 		newOrgBuilder(g.client),
 		newUserBuilder(g.client),
+		newTeamBuilder(g.client),
+		newRoleBuilder(g.client),
+		newServiceAccountBuilder(g.client),
 	}
 }
 
@@ -35,7 +38,8 @@ func (g *Grafana) Asset(ctx context.Context, asset *v2.AssetRef) (string, io.Rea
 func (g *Grafana) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error) {
 	return &v2.ConnectorMetadata{
 		DisplayName: "Grafana",
-		Description: "Connector syncing Grafana organizations and users to Baton",
+		Description: "Grafana connector syncs organizations, users, teams, RBAC roles, and service accounts. " +
+			"Supports account provisioning, organization role assignment, and team membership.",
 		AccountCreationSchema: &v2.ConnectorAccountCreationSchema{
 			FieldMap: map[string]*v2.ConnectorAccountCreationSchema_Field{
 				profileFieldFullName: {
@@ -58,7 +62,7 @@ func (g *Grafana) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error) {
 					Placeholder: "user@example.com",
 					Order:       2,
 				},
-				"login": {
+				profileKeyLogin: {
 					DisplayName: "Username",
 					Required:    false,
 					Description: "Username for login (email will be used if not provided)",
@@ -68,7 +72,7 @@ func (g *Grafana) Metadata(ctx context.Context) (*v2.ConnectorMetadata, error) {
 					Placeholder: "johndoe",
 					Order:       3,
 				},
-				"org_id": {
+				profileKeyOrgID: {
 					DisplayName: "Organization ID",
 					Required:    false,
 					Description: "ID of the organization to add user to",
@@ -98,7 +102,7 @@ func (g *Grafana) Validate(ctx context.Context) (annotations.Annotations, error)
 			Size: 1,
 			Page: 0,
 		}
-		_, _, err := g.client.ListOrganizations(ctx, &paginationOpts)
+		_, _, _, err := g.client.ListOrganizations(ctx, &paginationOpts)
 		if err != nil {
 			return nil, fmt.Errorf("grafana-connector: validate: failed to list organizations: %w", err)
 		}

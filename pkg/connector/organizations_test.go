@@ -13,8 +13,8 @@ import (
 
 	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
-	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
+	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 )
 
 // newCloudClientForTest creates a grafana.Client in Cloud mode (Bearer auth) pointed at ts.
@@ -66,7 +66,7 @@ func newSelfHostedClientForTest(t *testing.T, ts *httptest.Server) *grafana.Clie
 }
 
 // writeJSON writes data as JSON with the given HTTP status code.
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
+func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(data)
@@ -154,8 +154,11 @@ func TestGrantCloud_IdempotentWhenSameRole(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Grant returned unexpected error: %v", err)
 	}
-	if len(annos) == 0 {
+	if !annos.Contains(&v2.GrantAlreadyExists{}) {
 		t.Error("expected GrantAlreadyExists annotation, got none")
+	}
+	if !annos.Contains(&v2.RateLimitDescription{}) {
+		t.Error("idempotent Cloud grant must keep rate-limit annotations from ListCurrentOrgUsers")
 	}
 	if patchCalled {
 		t.Error("PATCH should not be called when user already has the requested role")
@@ -185,14 +188,11 @@ func TestGrantCloud_RoleChangeSuccess(t *testing.T) {
 		t.Fatalf("userResource: %v", err)
 	}
 
-	annos, err := newOrgBuilder(newCloudClientForTest(t, ts)).Grant(
+	_, err = newOrgBuilder(newCloudClientForTest(t, ts)).Grant(
 		context.Background(), principal, testOrgEntitlement("1", roleEditor),
 	)
 	if err != nil {
 		t.Fatalf("Grant returned unexpected error: %v", err)
-	}
-	if len(annos) != 0 {
-		t.Error("expected no annotations for successful role change")
 	}
 	if !patchCalled {
 		t.Error("expected PATCH /api/org/users/42 to be called")
@@ -259,8 +259,11 @@ func TestRevokeCloud_IdempotentWhenUserNotInOrg(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Revoke returned unexpected error: %v", err)
 	}
-	if len(annos) == 0 {
+	if !annos.Contains(&v2.GrantAlreadyRevoked{}) {
 		t.Error("expected GrantAlreadyRevoked annotation, got none")
+	}
+	if !annos.Contains(&v2.RateLimitDescription{}) {
+		t.Error("idempotent Cloud revoke must keep rate-limit annotations from ListCurrentOrgUsers")
 	}
 }
 
@@ -282,14 +285,11 @@ func TestRevokeCloud_RemovesUser(t *testing.T) {
 	ts := httptest.NewServer(mux)
 	defer ts.Close()
 
-	annos, err := newOrgBuilder(newCloudClientForTest(t, ts)).Revoke(
+	_, err := newOrgBuilder(newCloudClientForTest(t, ts)).Revoke(
 		context.Background(), testGrant("42", "1", roleViewer),
 	)
 	if err != nil {
 		t.Fatalf("Revoke returned unexpected error: %v", err)
-	}
-	if len(annos) != 0 {
-		t.Error("expected no annotations for successful revoke")
 	}
 	if !deleteCalled {
 		t.Error("expected DELETE /api/org/users/42 to be called")
@@ -354,12 +354,7 @@ func TestUserResource_SurfacesExternalSyncOnProfile(t *testing.T) {
 				t.Fatalf("userResource returned unexpected error: %v", err)
 			}
 
-			ut := &v2.UserTrait{}
-			annos := annotations.Annotations(r.Annotations)
-			if ok, err := annos.Pick(ut); err != nil || !ok {
-				t.Fatalf("user resource missing UserTrait (ok=%v, err=%v)", ok, err)
-			}
-			fields := ut.GetProfile().GetFields()
+			fields := rs.GetProfile(r).GetFields()
 			if _, present := fields["is_externally_synced"]; present != tc.wantSyncedPresent {
 				t.Errorf("is_externally_synced present = %v, want %v", present, tc.wantSyncedPresent)
 			}
@@ -375,7 +370,7 @@ func TestUserResource_SurfacesExternalSyncOnProfile(t *testing.T) {
 	}
 }
 
-// TestListSelfHosted_Orgs_SingleOrgSyncs reproduces the CXH-2013 CI regression.
+// TestListSelfHosted_Orgs_SingleOrgSyncs verifies the single-organization path.
 // /api/orgs is 0-based, so the first page must be requested with no explicit page
 // param (page 0). A fresh Grafana has exactly one org (id 1); requesting page=1
 // (as a 1-based scheme would) returns an empty second page, so the org — and its
@@ -421,8 +416,8 @@ func TestListSelfHosted_Orgs_SingleOrgSyncs(t *testing.T) {
 // each exactly once, with no duplicate resources.
 func TestListSelfHosted_Orgs_PaginationZeroBased(t *testing.T) {
 	const (
-		perPage  = int(ResourcesPageSize) // 50
-		totalOrg = 109                    // pages 0, 1, 2 → 50 + 50 + 9
+		perPage  = int(ResourcesPageSize)
+		totalOrg = perPage*2 + 9
 	)
 
 	var requestedPages []string

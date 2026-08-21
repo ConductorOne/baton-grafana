@@ -18,14 +18,6 @@ import (
 	"go.uber.org/zap"
 )
 
-const (
-	roleViewer = "Viewer"
-	roleEditor = "Editor"
-	roleAdmin  = "Admin"
-)
-
-var userRoles = []string{roleViewer, roleEditor, roleAdmin}
-
 type orgBuilder struct {
 	resourceType *v2.ResourceType
 	client       *grafana.Client
@@ -89,35 +81,32 @@ func (o *orgBuilder) listSelfHosted(ctx context.Context, pToken *pagination.Toke
 	}
 
 	// Fetch organizations from Grafana
-	orgs, numNextPage, err := o.client.ListOrganizations(ctx, &paginationOpts)
+	orgs, nextPage, annos, err := o.client.ListOrganizations(ctx, &paginationOpts)
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("grafana-connector: failed to list organizations: %w", err)
+		return nil, "", annos, fmt.Errorf("grafana-connector: failed to list organizations: %w", err)
 	}
 
-	// Determine next page token
-	var pageToken string
-	if numNextPage > 0 {
-		pageToken = strconv.FormatUint(numNextPage, 10)
-	}
-
-	next, err := bag.NextToken(pageToken)
+	next, err := bag.NextToken(nextPage)
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("failed to generate next page token: %w", err)
+		return nil, "", annos, fmt.Errorf("failed to generate next page token: %w", err)
 	}
 
 	// Iterate over organizations and filter valid ones
 	resources := make([]*v2.Resource, 0, len(orgs))
 	for _, org := range orgs {
+		if org == nil {
+			continue
+		}
 		// Convert organization to a v2.Resource
-		resource, err := orgResource(org)
+		resource, err := orgResource(*org)
 		if err != nil {
-			return nil, "", nil, fmt.Errorf("failed to create resource for org %s: %w", org.Name, err)
+			return nil, "", annos, fmt.Errorf("failed to create resource for org %s: %w", org.Name, err)
 		}
 
 		resources = append(resources, resource)
 	}
 
-	return resources, next, nil, nil
+	return resources, next, annos, nil
 }
 
 // Entitlements returns a slice of entitlements for possible user roles under organization (Viewer, Editor, Admin).
@@ -146,22 +135,23 @@ func (o *orgBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *p
 
 // Grants returns a slice of grants for each user and their set role under organization.
 func (o *orgBuilder) Grants(ctx context.Context, parentResource *v2.Resource, _ *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
-	var usersByOrgResponse []grafana.UserByOrgResponse
+	var usersByOrgResponse []*grafana.UserByOrgResponse
+	var annos annotations.Annotations
 	var err error
 
 	if o.client.IsCloud() {
 		// Cloud mode: GET /api/org/users — no orgID param needed, no pagination.
 		// ID stability: UserByOrgResponse.ID (json:"userId") is the same numeric Grafana user ID
 		// as User.ID from the self-hosted path. Grant IDs are therefore unchanged.
-		usersByOrgResponse, err = o.client.ListCurrentOrgUsers(ctx)
+		usersByOrgResponse, annos, err = o.client.ListCurrentOrgUsers(ctx)
 		if err != nil {
-			return nil, "", nil, fmt.Errorf("grafana-connector: cloud: failed to list current org users: %w", err)
+			return nil, "", annos, fmt.Errorf("grafana-connector: cloud: failed to list current org users: %w", err)
 		}
 	} else {
 		// Self-hosted mode: original behavior unchanged
-		usersByOrgResponse, err = o.client.ListUsersByOrg(ctx, parentResource.Id.Resource)
+		usersByOrgResponse, annos, err = o.client.ListUsersByOrg(ctx, parentResource.Id.Resource)
 		if err != nil {
-			return nil, "", nil, fmt.Errorf("grafana-connector: failed to list users under organization %s: %w", parentResource.Id.Resource, err)
+			return nil, "", annos, fmt.Errorf("grafana-connector: failed to list users under organization %s: %w", parentResource.Id.Resource, err)
 		}
 	}
 
@@ -169,6 +159,9 @@ func (o *orgBuilder) Grants(ctx context.Context, parentResource *v2.Resource, _ 
 
 	// Iterate through users and create grants — identical for both modes
 	for _, userByOrg := range usersByOrgResponse {
+		if userByOrg == nil {
+			continue
+		}
 		// Skip users with invalid roles
 		if !slices.Contains(userRoles, userByOrg.Role) {
 			continue
@@ -179,14 +172,14 @@ func (o *orgBuilder) Grants(ctx context.Context, parentResource *v2.Resource, _ 
 		user := userByOrg.ToUser()
 		ur, err := userResource(&user)
 		if err != nil {
-			return nil, "", nil, fmt.Errorf("failed to generate user resource for %s: %w", user.Email, err)
+			return nil, "", annos, fmt.Errorf("failed to generate user resource for %s: %w", user.Email, err)
 		}
 
 		// Append grant to the slice
 		grants = append(grants, grant.NewGrant(parentResource, userByOrg.Role, ur.Id))
 	}
 
-	return grants, "", nil, nil
+	return grants, "", annos, nil
 }
 
 // Grant adds a user to an organization with the specified role.
@@ -241,36 +234,31 @@ func (o *orgBuilder) grantCloud(ctx context.Context, l *zap.Logger, userID, orgI
 	l.Debug("Cloud mode: granting org membership", zap.Int("user_id", userID), zap.Int("org_id", orgID), zap.String("role", role))
 
 	// Grafana Cloud doesn't expose a single-user lookup via service account token, so requesting all of them per Grant call is somewhat forced.
-	currentUsers, err := o.client.ListCurrentOrgUsers(ctx)
+	currentUsers, listAnnos, err := o.client.ListCurrentOrgUsers(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("grafana-connector: cloud: failed to list org users for grant: %w", err)
+		return listAnnos, fmt.Errorf("grafana-connector: cloud: failed to list org users for grant: %w", err)
 	}
 
 	for _, cu := range currentUsers {
-		if cu.ID == userID {
-			if cu.Role == role {
-				// Already has the requested role
-				return annotations.New(&v2.GrantAlreadyExists{}), nil
-			}
-			// Role differs — update via PATCH (single call, no remove+re-add)
-			l.Debug("Cloud mode: updating user role via PATCH", zap.Int("user_id", userID), zap.String("new_role", role))
-			if err = o.client.UpdateOrgUserRole(ctx, userID, role); err != nil {
-				if cu.IsExternallySynced && isExternallySyncedRoleError(err) {
-					l.Error("grafana-connector: cloud: role change blocked — user is managed by an external identity provider",
-						zap.Int("user_id", userID),
-						zap.String("current_role", cu.Role),
-						zap.String("requested_role", role),
-						zap.Strings("auth_labels", cu.AuthLabels),
-						zap.String("resolution", "in Grafana, go to Administration → Authentication and enable 'Skip org role sync' for the SSO provider,"+
-							" or set skip_org_role_sync=true via PUT /api/v1/sso-settings/{provider}"),
-					)
-					return nil, fmt.Errorf("grafana-connector: cloud: user %d role is controlled by an external identity provider (current: %s, requested: %s) "+
-						"— to enable provisioning, set skip_org_role_sync=true in Grafana SSO settings: %w", userID, cu.Role, role, err)
-				}
-				return nil, fmt.Errorf("grafana-connector: cloud: failed to update role for user %d: %w", userID, err)
-			}
-			return nil, nil
+		if cu == nil || cu.ID != userID {
+			continue
 		}
+		if cu.Role == role {
+			// Already has the requested role
+			listAnnos.Update(&v2.GrantAlreadyExists{})
+			return listAnnos, nil
+		}
+		// Role differs — update via PATCH (single call, no remove+re-add)
+		l.Debug("Cloud mode: updating user role via PATCH", zap.Int("user_id", userID), zap.String("new_role", role))
+		annos, err := o.client.UpdateOrgUserRole(ctx, userID, role)
+		if err != nil {
+			if cu.IsExternallySynced && isExternallySyncedRoleError(err) {
+				return annos, fmt.Errorf("grafana-connector: cloud: user %d role is controlled by an external identity provider (current: %s, requested: %s) "+
+					"— to enable provisioning, set skip_org_role_sync=true in Grafana SSO settings: %w", userID, cu.Role, role, err)
+			}
+			return annos, fmt.Errorf("grafana-connector: cloud: failed to update role for user %d: %w", userID, err)
+		}
+		return annos, nil
 	}
 
 	// User not found in the current org — this is unexpected in Cloud mode because listCloud
@@ -285,29 +273,30 @@ func (o *orgBuilder) grantSelfHosted(ctx context.Context, l *zap.Logger, userID,
 	l.Debug("Adding user to organization", zap.Int("org_id", orgID), zap.Int("user_id", userID), zap.String("role", role))
 
 	// Find the user in the organization's existing users
-	orgsForUser, err := o.client.ListOrgsForUser(ctx, userID)
+	orgsForUser, listAnnos, err := o.client.ListOrgsForUser(ctx, userID)
 	if err != nil {
-		return nil, fmt.Errorf("grafana-connector: failed to list users in organization %d: %w", orgID, err)
+		return listAnnos, fmt.Errorf("grafana-connector: failed to list users in organization %d: %w", orgID, err)
 	}
 
 	// Check if user is already in the organization
 	for _, orgForUser := range orgsForUser {
-		if orgForUser.OrgId == orgID {
-			// User already exists in org, check if they have the same role
-			if orgForUser.Role == role {
-				// User already has the requested role, return GrantAlreadyExists
-				return annotations.New(&v2.GrantAlreadyExists{}), nil
-			}
-
-			l.Debug("Removing user from organization", zap.Int("org_id", orgID), zap.Int("user_id", userID), zap.String("role", role))
-			// User exists but with a different role
-			// Remove the user first to update their role
-			err = o.client.RemoveUserFromOrg(ctx, strconv.Itoa(orgForUser.OrgId), userID)
-			if err != nil {
-				return nil, fmt.Errorf("grafana-connector: failed to remove user %d from organization %d to update role: %w", userID, orgID, err)
-			}
-			break
+		if orgForUser == nil || orgForUser.OrgId != orgID {
+			continue
 		}
+		// User already exists in org, check if they have the same role
+		if orgForUser.Role == role {
+			listAnnos.Update(&v2.GrantAlreadyExists{})
+			return listAnnos, nil
+		}
+
+		l.Debug("Removing user from organization", zap.Int("org_id", orgID), zap.Int("user_id", userID), zap.String("role", role))
+		// User exists but with a different role
+		// Remove the user first to update their role
+		annos, err := o.client.RemoveUserFromOrg(ctx, strconv.Itoa(orgForUser.OrgId), userID)
+		if err != nil {
+			return annos, fmt.Errorf("grafana-connector: failed to remove user %d from organization %d to update role: %w", userID, orgID, err)
+		}
+		break
 	}
 
 	grafanaUser, err := o.client.GetUserByID(ctx, userID)
@@ -322,12 +311,12 @@ func (o *orgBuilder) grantSelfHosted(ctx context.Context, l *zap.Logger, userID,
 	}
 
 	// Call the API to add the user to the organization
-	err = o.client.AddUserToOrg(ctx, strconv.Itoa(orgID), req)
+	annos, err := o.client.AddUserToOrg(ctx, strconv.Itoa(orgID), req)
 	if err != nil {
-		return nil, fmt.Errorf("grafana-connector: failed to add user %s to organization %d with role %s: %w", grafanaUser.Login, orgID, role, err)
+		return annos, fmt.Errorf("grafana-connector: failed to add user %s to organization %d with role %s: %w", grafanaUser.Login, orgID, role, err)
 	}
 
-	return nil, nil
+	return annos, nil
 }
 
 // Revoke removes a user from an organization.
@@ -372,39 +361,37 @@ func (o *orgBuilder) revokeCloud(ctx context.Context, l *zap.Logger, userID, org
 	l.Debug("Cloud mode: revoking org membership", zap.Int("user_id", userID), zap.Int("org_id", orgID))
 
 	// Grafana Cloud doesn't expose a single-user lookup via service account token, so requesting all of them per Revoke call is somewhat forced.
-	currentUsers, err := o.client.ListCurrentOrgUsers(ctx)
+	currentUsers, listAnnos, err := o.client.ListCurrentOrgUsers(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("grafana-connector: cloud: failed to list org users for revoke: %w", err)
+		return listAnnos, fmt.Errorf("grafana-connector: cloud: failed to list org users for revoke: %w", err)
 	}
 
 	found := false
 	var isExternallySynced bool
 	for _, cu := range currentUsers {
-		if cu.ID == userID {
-			found = true
-			isExternallySynced = cu.IsExternallySynced
-			break
+		if cu == nil || cu.ID != userID {
+			continue
 		}
+		found = true
+		isExternallySynced = cu.IsExternallySynced
+		break
 	}
 
 	if !found {
-		return annotations.New(&v2.GrantAlreadyRevoked{}), nil
+		listAnnos.Update(&v2.GrantAlreadyRevoked{})
+		return listAnnos, nil
 	}
 
-	if err = o.client.RemoveCurrentOrgUser(ctx, userID); err != nil {
+	annos, err := o.client.RemoveCurrentOrgUser(ctx, userID)
+	if err != nil {
 		if isExternallySynced && isExternallySyncedRoleError(err) {
-			l.Error("grafana-connector: cloud: membership revoke blocked — user is managed by an external identity provider",
-				zap.Int("user_id", userID),
-				zap.String("resolution", "in Grafana, go to Administration → Authentication and enable 'Skip org role sync' for the SSO provider, "+
-					"or set skip_org_role_sync=true via PUT /api/v1/sso-settings/{provider}"),
-			)
-			return nil, fmt.Errorf("grafana-connector: cloud: user %d is managed by an external identity provider and cannot be removed via the API "+
+			return annos, fmt.Errorf("grafana-connector: cloud: user %d is managed by an external identity provider and cannot be removed via the API "+
 				"— to enable provisioning, set skip_org_role_sync=true in Grafana SSO settings: %w", userID, err)
 		}
-		return nil, fmt.Errorf("grafana-connector: cloud: failed to remove user %d from org: %w", userID, err)
+		return annos, fmt.Errorf("grafana-connector: cloud: failed to remove user %d from org: %w", userID, err)
 	}
 
-	return nil, nil
+	return annos, nil
 }
 
 // revokeSelfHosted is the original Revoke logic for self-hosted Grafana — unchanged.
@@ -412,14 +399,14 @@ func (o *orgBuilder) revokeSelfHosted(ctx context.Context, l *zap.Logger, userID
 	l.Debug("Removing user from organization", zap.Int("org_id", orgID), zap.Int("user_id", userID))
 
 	// Check if the user is in the organization
-	orgsForUser, err := o.client.ListOrgsForUser(ctx, userID)
+	orgsForUser, listAnnos, err := o.client.ListOrgsForUser(ctx, userID)
 	if err != nil {
-		return nil, fmt.Errorf("grafana-connector: failed to list users in organization %d: %w", orgID, err)
+		return listAnnos, fmt.Errorf("grafana-connector: failed to list users in organization %d: %w", orgID, err)
 	}
 
 	userHasOrg := false
 	for _, orgForUser := range orgsForUser {
-		if orgForUser.OrgId == orgID {
+		if orgForUser != nil && orgForUser.OrgId == orgID {
 			userHasOrg = true
 			break
 		}
@@ -427,17 +414,18 @@ func (o *orgBuilder) revokeSelfHosted(ctx context.Context, l *zap.Logger, userID
 
 	// If user is not in the organization, return GrantAlreadyRevoked
 	if !userHasOrg {
-		return annotations.New(&v2.GrantAlreadyRevoked{}), nil
+		listAnnos.Update(&v2.GrantAlreadyRevoked{})
+		return listAnnos, nil
 	}
 
 	// Call the API to remove the user from the organization
-	err = o.client.RemoveUserFromOrg(ctx, g.Entitlement.Resource.Id.Resource, userID)
+	annos, err := o.client.RemoveUserFromOrg(ctx, g.Entitlement.Resource.Id.Resource, userID)
 	if err != nil {
-		return nil, fmt.Errorf("grafana-connector: failed to remove user %d from organization %d: %w",
+		return annos, fmt.Errorf("grafana-connector: failed to remove user %d from organization %d: %w",
 			userID, orgID, err)
 	}
 
-	return nil, nil
+	return annos, nil
 }
 
 // isExternallySyncedRoleError reports whether a Grafana API error is the 403

@@ -14,6 +14,68 @@
     },
     {
       "resourceType": {
+        "id": "role",
+        "displayName": "Role",
+        "traits": [
+          "TRAIT_ROLE"
+        ],
+        "annotations": [
+          {
+            "@type": "type.googleapis.com/c1.connector.v2.SkipEntitlements"
+          },
+          {
+            "@type": "type.googleapis.com/c1.connector.v2.TypeScopedGrants"
+          },
+          {
+            "@type": "type.googleapis.com/c1.connector.v2.OptInRequired"
+          }
+        ]
+      },
+      "capabilities": [
+        "CAPABILITY_SYNC"
+      ],
+      "permissions": {},
+      "optInRequired": true
+    },
+    {
+      "resourceType": {
+        "id": "service_account",
+        "displayName": "Service Account",
+        "traits": [
+          "TRAIT_USER"
+        ],
+        "annotations": [
+          {
+            "@type": "type.googleapis.com/c1.connector.v2.SkipEntitlements"
+          }
+        ]
+      },
+      "capabilities": [
+        "CAPABILITY_SYNC"
+      ],
+      "permissions": {}
+    },
+    {
+      "resourceType": {
+        "id": "team",
+        "displayName": "Team",
+        "traits": [
+          "TRAIT_GROUP"
+        ],
+        "annotations": [
+          {
+            "@type": "type.googleapis.com/c1.connector.v2.SkipEntitlements"
+          }
+        ]
+      },
+      "capabilities": [
+        "CAPABILITY_SYNC",
+        "CAPABILITY_PROVISION"
+      ],
+      "permissions": {}
+    },
+    {
+      "resourceType": {
         "id": "user",
         "displayName": "User",
         "traits": [
