@@ -101,10 +101,10 @@ func (t *teamBuilder) StaticEntitlements(_ context.Context, _ *pagination.Token)
 	}, "", nil, nil
 }
 
-// Grants emits team membership only. Team→RBAC-role assignments are emitted by
-// roleBuilder.GrantsForResourceType (TypeScopedGrants) so they are tied to the
-// role type's own sync lifecycle and never reference unsynced role entitlements
-// when the OptIn-required role type is off.
+// Grants emits team membership (primary) and the RBAC roles the team holds
+// (secondary). Grafana lists both per team — GET /api/teams/{id}/members and
+// POST /api/access-control/teams/roles/search scoped to this team id — so both
+// belong on the principal that carries the assignment.
 func (t *teamBuilder) Grants(ctx context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
 	teamID, err := strconv.Atoi(resource.Id.Resource)
 	if err != nil {
@@ -128,7 +128,72 @@ func (t *teamBuilder) Grants(ctx context.Context, resource *v2.Resource, _ *pagi
 		grants = append(grants, grant.NewGrant(resource, teamMemberEntitlement, principalID))
 	}
 
-	return grants, "", annos, nil
+	roleGrants, roleAnnos, err := t.roleGrants(ctx, resource, teamID)
+	// Update (don't append) so a single RateLimitDescription survives Pick.
+	var roleRL v2.RateLimitDescription
+	if ok, pickErr := roleAnnos.Pick(&roleRL); pickErr == nil && ok {
+		annos.WithRateLimiting(&roleRL)
+	}
+	if err != nil {
+		return nil, "", annos, err
+	}
+
+	return append(grants, roleGrants...), "", annos, nil
+}
+
+// roleGrants returns the RBAC roles assigned to a team. Access-control is
+// Cloud/Enterprise only and OSS answers 404 on every /api/access-control path,
+// so an unavailable API soft-skips this secondary path — team membership above
+// must keep syncing on every edition. Any other RBAC error fails closed: an
+// empty emission would read as a revoke of every role the team holds.
+func (t *teamBuilder) roleGrants(ctx context.Context, resource *v2.Resource, teamID int) ([]*v2.Grant, annotations.Annotations, error) {
+	rolesByTeam, annos, err := t.client.ListRolesForTeams(ctx, []int{teamID})
+	if err != nil {
+		if errors.Is(err, grafana.ErrRBACUnavailable) {
+			return nil, annos, nil
+		}
+		return nil, annos, fmt.Errorf("grafana-connector: failed to list roles for team %d: %w", teamID, err)
+	}
+
+	return roleGrantsForTeam(resource.Id, emitableRoleNames(rolesByTeam[resource.Id.Resource])), annos, nil
+}
+
+// emitableRoleNames keeps only the RBAC role names that roleBuilder.List would
+// have synced, so team→role grants never target a role resource it filtered out.
+func emitableRoleNames(roles []*grafana.Role) []string {
+	out := make([]string, 0, len(roles))
+	for _, role := range roles {
+		if shouldEmitRole(role) {
+			out = append(out, role.Name)
+		}
+	}
+	return out
+}
+
+// roleGrantsForTeam builds team→role grants (role resource bearing the assigned
+// entitlement, team as principal) with a GrantExpandable pointing at the team's
+// member entitlement so members inherit the role in C1. Grants are immutable:
+// C1 cannot provision non-user principals.
+func roleGrantsForTeam(teamID *v2.ResourceId, roleNames []string) []*v2.Grant {
+	teamResource := &v2.Resource{Id: teamID}
+	memberEntitlementID := ent.NewEntitlementID(teamResource, teamMemberEntitlement)
+	out := make([]*v2.Grant, 0, len(roleNames))
+	for _, name := range roleNames {
+		roleID := &v2.ResourceId{ResourceType: resourceTypeRole.Id, Resource: name}
+		out = append(out, grant.NewGrant(
+			&v2.Resource{Id: roleID},
+			roleAssignedEntitlement,
+			teamResource.Id,
+			grant.WithAnnotation(
+				&v2.GrantExpandable{
+					EntitlementIds: []string{memberEntitlementID},
+					Shallow:        true,
+				},
+				&v2.GrantImmutable{},
+			),
+		))
+	}
+	return out
 }
 
 func parseTeamMembershipIDs(principal *v2.Resource, teamResourceID string) (int, int, error) {

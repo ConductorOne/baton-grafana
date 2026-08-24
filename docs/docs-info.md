@@ -28,8 +28,8 @@ field group:
      self-hosted instance, teams outside the admin's current org are not synced
      and must not be read as deletions. Synced by default — the teams API exists
      on every Grafana edition with the same Admin credential already required for
-     users/orgs. Team membership grants are emitted from the team builder; team→
-     RBAC role assignments are **not** emitted here (see Roles below).
+     users/orgs. The team builder emits both team membership and the RBAC roles
+     the team holds (see Roles below).
    - Roles — Grafana RBAC roles from `GET /api/access-control/roles`, filtered to
      the IRM (`plugins:grafana-irm-app:`) and OnCall (`plugins:grafana-oncall-app:`)
      plugin roles (for example `plugins:grafana-irm-app:schedules-editor`,
@@ -43,15 +43,16 @@ field group:
      availability probe and no cached state. A missing team is not a 404 (both
      the per-team GET and the search POST answer 200 with an empty body), so the
      404 unambiguously means the API is absent. When the role type is scheduled
-     and RBAC is absent, List fails closed. Team→role grants are emitted by
-     `roleBuilder.GrantsForResourceType` (`TypeScopedGrants`): the SDK schedules
-     that op only when the role type is in the sync, it paginates teams and
-     batches `POST /api/access-control/teams/roles/search` per page (same
-     current-org team scope as Teams above), and it fails closed on every RBAC
-     error (an empty successful emission would wipe prior assignments). Grants are
-     **immutable** (C1 cannot provision non-user principals). Team membership
-     still syncs independently when roles are off. Operators enable roles in the
-     C1 UI when they have Cloud/Enterprise.
+     and RBAC is absent, List fails closed. Grafana lists role assignments per
+     team, so team→role grants are emitted by `teamBuilder.Grants` — one
+     `POST /api/access-control/teams/roles/search` scoped to the team being
+     synced (same current-org team scope as Teams above) — and the role type
+     carries `SkipGrants`. That secondary path soft-skips when the
+     access-control API is absent, so team membership keeps syncing on OSS; every
+     other RBAC error fails the call closed (an empty successful emission would
+     wipe prior assignments). Grants are **immutable** (C1 cannot provision
+     non-user principals). Operators enable roles in the C1 UI when they have
+     Cloud/Enterprise.
    - Service accounts — `GET /api/serviceaccounts/search`, also scoped to the
      credential's **current organization** (same caveat as Teams on multi-org
      self-hosted). Service accounts do not appear in `GET /api/org/users`, so they
@@ -164,7 +165,7 @@ API doc root: <https://grafana.com/docs/grafana/latest/developers/http_api/>
 | Operation                      | Method + path                                           | Doc                                                                                                           |
 | :----------------------------- | :------------------------------------------------------ | :------------------------------------------------------------------------------------------------------------ |
 | List roles                     | `GET /api/access-control/roles`                         | [RBAC HTTP API](https://grafana.com/docs/grafana/latest/developers/http_api/access_control/#get-all-roles)    |
-| List roles on teams (batch)    | `POST /api/access-control/teams/roles/search`           | [RBAC HTTP API](https://grafana.com/docs/grafana/latest/developers/http_api/access_control/)                  |
+| List the roles a team holds    | `POST /api/access-control/teams/roles/search`           | [RBAC HTTP API](https://grafana.com/docs/grafana/latest/developers/http_api/access_control/)                  |
 
 ### Service accounts
 
