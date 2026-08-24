@@ -535,7 +535,8 @@ func (c *Client) ListServiceAccounts(ctx context.Context, pVars *PaginationVars)
 
 // ListRoles calls GET /api/access-control/roles.
 // The endpoint returns all roles in one response and is not paginated.
-// HTTP 404 maps to ErrRBACUnavailable (OSS build without access-control).
+// HTTP 404 maps to ErrRBACUnavailable (OSS build without access-control) and
+// HTTP 403 to ErrRBACForbidden (credential without `roles:read`).
 func (c *Client) ListRoles(ctx context.Context) ([]*Role, annotations.Annotations, error) {
 	var roles rolesListResponse
 	annos, err := c.doRequest(
@@ -550,6 +551,9 @@ func (c *Client) ListRoles(ctx context.Context) ([]*Role, annotations.Annotation
 		if rbacUnavailable(err) {
 			return nil, annos, fmt.Errorf("%w: %w", ErrRBACUnavailable, err)
 		}
+		if rbacForbidden(err) {
+			return nil, annos, fmt.Errorf("%w: %w", ErrRBACForbidden, err)
+		}
 		return nil, annos, fmt.Errorf("grafana-client: list roles: %w", err)
 	}
 
@@ -560,7 +564,8 @@ func (c *Client) ListRoles(ctx context.Context) ([]*Role, annotations.Annotation
 // {"teamIds":[...]}. The response is keyed by team id string → []*Role, and an
 // unknown team id yields an empty response rather than an error. An empty
 // teamIDs slice returns an empty map without calling the API. HTTP 404 maps to
-// ErrRBACUnavailable (OSS build without access-control).
+// ErrRBACUnavailable (OSS build without access-control) and HTTP 403 to
+// ErrRBACForbidden (credential without `roles:read`).
 func (c *Client) ListRolesForTeams(ctx context.Context, teamIDs []int) (map[string][]*Role, annotations.Annotations, error) {
 	if len(teamIDs) == 0 {
 		return map[string][]*Role{}, nil, nil
@@ -579,6 +584,9 @@ func (c *Client) ListRolesForTeams(ctx context.Context, teamIDs []int) (map[stri
 	if err != nil {
 		if rbacUnavailable(err) {
 			return nil, annos, fmt.Errorf("%w: %w", ErrRBACUnavailable, err)
+		}
+		if rbacForbidden(err) {
+			return nil, annos, fmt.Errorf("%w: %w", ErrRBACForbidden, err)
 		}
 		return nil, annos, fmt.Errorf("grafana-client: list roles for teams: %w", err)
 	}

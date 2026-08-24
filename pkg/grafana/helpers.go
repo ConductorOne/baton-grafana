@@ -52,6 +52,10 @@ var ErrTeamMemberNotFound = errors.New("grafana-client: team member not found")
 // ErrRBACUnavailable is returned when the RBAC API is not available (OSS without Enterprise).
 var ErrRBACUnavailable = errors.New("grafana-client: rbac api unavailable")
 
+// ErrRBACForbidden is returned when the credential cannot read the RBAC API
+// (HTTP 403, token without `roles:read`).
+var ErrRBACForbidden = errors.New("grafana-client: rbac api forbidden")
+
 // ErrUserAlreadyExists is returned when attempting to create a user that already exists in Grafana.
 var ErrUserAlreadyExists = errors.New("grafana-client: user already exists")
 
@@ -104,6 +108,14 @@ func nextPageToken(pVars *PaginationVars, pageLen uint64) string {
 // an unknown team id, so a 404 unambiguously means the API itself is absent.
 func rbacUnavailable(err error) bool {
 	return status.Code(err) == codes.NotFound
+}
+
+// rbacForbidden maps HTTP 403 from an access-control endpoint to
+// ErrRBACForbidden: the API exists but this credential lacks `roles:read`.
+// Callers decide what that means — the role type's own List fails closed, while
+// the team's secondary role path skips it so team membership keeps syncing.
+func rbacForbidden(err error) bool {
+	return status.Code(err) == codes.PermissionDenied
 }
 
 // ToUser converts a UserByOrgResponse into the shared User shape.

@@ -43,16 +43,20 @@ field group:
      availability probe and no cached state. A missing team is not a 404 (both
      the per-team GET and the search POST answer 200 with an empty body), so the
      404 unambiguously means the API is absent. When the role type is scheduled
-     and RBAC is absent, List fails closed. Grafana lists role assignments per
-     team, so team→role grants are emitted by `teamBuilder.Grants` — one
+     and RBAC is absent (404) or not readable by the credential (403), List
+     fails closed — enabling roles without `roles:read` is meant to fail the
+     sync. Grafana lists role assignments per team, so team→role grants are
+     emitted by `teamBuilder.Grants` — one
      `POST /api/access-control/teams/roles/search` scoped to the team being
      synced (same current-org team scope as Teams above) — and the role type
-     carries `SkipGrants`. That secondary path soft-skips when the
-     access-control API is absent, so team membership keeps syncing on OSS; every
-     other RBAC error fails the call closed (an empty successful emission would
-     wipe prior assignments). Grants are **immutable** (C1 cannot provision
-     non-user principals). Operators enable roles in the C1 UI when they have
-     Cloud/Enterprise.
+     carries `SkipGrants`. Teams sync on every edition with any credential, so
+     that secondary path soft-skips both 404 and 403: a tenant that never
+     enabled roles keeps syncing teams with a narrower token, and a tenant that
+     did already fails on the role List above, so no incomplete c1z is ingested.
+     Every other RBAC error fails the call closed (an empty successful emission
+     would wipe prior assignments). Grants are **immutable** (C1 cannot
+     provision non-user principals). Operators enable roles in the C1 UI when
+     they have Cloud/Enterprise.
    - Service accounts — `GET /api/serviceaccounts/search`, also scoped to the
      credential's **current organization** (same caveat as Teams on multi-org
      self-hosted). Service accounts do not appear in `GET /api/org/users`, so they

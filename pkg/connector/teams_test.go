@@ -636,59 +636,62 @@ func TestTeamGrantsEmitTeamRoleGrants(t *testing.T) {
 	}
 }
 
-// Access-control is absent on OSS (404 on every /api/access-control path). That
-// soft-skips the secondary role path only — team membership must still sync on
-// every Grafana edition.
-func TestTeamGrantsSoftSkipWhenRBACUnavailable(t *testing.T) {
-	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/teams/7/members" {
-			writeJSON(w, http.StatusOK, []map[string]any{
-				{"orgId": 1, "teamId": 7, "userId": 14, "email": "a@ex.com", "login": "alice", "name": "Alice", "permission": 0},
-			})
-			return
-		}
-		http.NotFound(w, r)
-	}))
-	defer ts.Close()
-
-	resource := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}}
-	grants, _, _, err := newTeamBuilder(newCloudClientForTest(t, ts)).Grants(context.Background(), resource, &pagination.Token{})
-	if err != nil {
-		t.Fatalf("Grants: %v", err)
-	}
-	if len(grants) != 1 || grants[0].Principal.Id.Resource != "14" {
-		t.Fatalf("expected only the member grant for user 14, got %+v", grants)
-	}
-}
-
-// Every RBAC error other than "API absent" must fail the whole Grants call —
-// emitting membership alone would read as a revoke of the team's role grants.
-func TestTeamGrantsFailClosedOnRBACError(t *testing.T) {
-	statuses := []int{http.StatusForbidden, http.StatusInternalServerError}
-	for _, code := range statuses {
+// Teams sync on every edition and with any credential, so neither an absent
+// access-control API (OSS: 404) nor a credential without `roles:read` (403) may
+// stop team membership. Roles are opt-in and their own List fails closed on
+// both, so an operator who enabled roles still gets a failing sync rather than
+// silently empty assignments.
+func TestTeamGrantsSoftSkipWhenRolesUnreadable(t *testing.T) {
+	for _, code := range []int{http.StatusNotFound, http.StatusForbidden} {
 		t.Run(strconv.Itoa(code), func(t *testing.T) {
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/api/teams/7/members":
 					writeJSON(w, http.StatusOK, []map[string]any{
-						{"orgId": 1, "teamId": 7, "userId": 14, "login": "alice"},
+						{"orgId": 1, "teamId": 7, "userId": 14, "email": "a@ex.com", "login": "alice", "name": "Alice", "permission": 0},
 					})
-				case "/api/access-control/teams/roles/search":
-					writeJSON(w, code, map[string]string{"message": "nope"})
 				default:
-					http.NotFound(w, r)
+					writeJSON(w, code, map[string]string{"message": "nope"})
 				}
 			}))
 			defer ts.Close()
 
 			resource := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}}
 			grants, _, _, err := newTeamBuilder(newCloudClientForTest(t, ts)).Grants(context.Background(), resource, &pagination.Token{})
-			if err == nil {
-				t.Fatalf("expected team-roles search %d to fail Grants", code)
+			if err != nil {
+				t.Fatalf("Grants: %v", err)
 			}
-			if grants != nil {
-				t.Fatalf("failed Grants must not emit a partial set, got %d grants", len(grants))
+			if len(grants) != 1 || grants[0].Principal.Id.Resource != "14" {
+				t.Fatalf("expected only the member grant for user 14, got %+v", grants)
 			}
 		})
+	}
+}
+
+// An RBAC error that is neither "API absent" nor "not permitted" must fail the
+// whole Grants call — emitting membership alone would read as a revoke of the
+// team's role grants.
+func TestTeamGrantsFailClosedOnRBACError(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/teams/7/members":
+			writeJSON(w, http.StatusOK, []map[string]any{
+				{"orgId": 1, "teamId": 7, "userId": 14, "login": "alice"},
+			})
+		case "/api/access-control/teams/roles/search":
+			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "nope"})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer ts.Close()
+
+	resource := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}}
+	grants, _, _, err := newTeamBuilder(newCloudClientForTest(t, ts)).Grants(context.Background(), resource, &pagination.Token{})
+	if err == nil {
+		t.Fatal("expected a 500 from the team-roles search to fail Grants")
+	}
+	if grants != nil {
+		t.Fatalf("failed Grants must not emit a partial set, got %d grants", len(grants))
 	}
 }

@@ -41,6 +41,40 @@ func TestRBACEndpointsMapNotFoundToUnavailable(t *testing.T) {
 	}
 }
 
+// A credential without `roles:read` gets 403 on every RBAC path. That is a
+// distinct condition from an absent API, so it maps to its own sentinel and
+// each caller decides: the role List fails, the team's role path skips.
+func TestRBACEndpointsMapForbiddenToForbidden(t *testing.T) {
+	var calls int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{"message": "Access denied"})
+	}))
+	defer ts.Close()
+
+	client, err := NewClient(context.Background(), ts.URL, "", "", "token")
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	ctx := context.Background()
+
+	if _, _, err := client.ListRoles(ctx); !errors.Is(err, ErrRBACForbidden) {
+		t.Fatalf("ListRoles: %v", err)
+	}
+	_, _, teamsErr := client.ListRolesForTeams(ctx, []int{7})
+	if !errors.Is(teamsErr, ErrRBACForbidden) {
+		t.Fatalf("ListRolesForTeams: %v", teamsErr)
+	}
+	if errors.Is(teamsErr, ErrRBACUnavailable) {
+		t.Fatal("403 must not map to ErrRBACUnavailable")
+	}
+	if calls != 2 {
+		t.Fatalf("expected one call per method, got %d", calls)
+	}
+}
+
 // A 5xx must stay a plain error so the sync fails closed rather than treating
 // the RBAC API as absent.
 func TestRBACEndpointsServerErrorIsNotUnavailable(t *testing.T) {

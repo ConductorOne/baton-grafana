@@ -141,21 +141,27 @@ func (t *teamBuilder) Grants(ctx context.Context, resource *v2.Resource, _ *pagi
 	return append(grants, roleGrants...), "", annos, nil
 }
 
-// roleGrants returns the RBAC roles assigned to a team. Access-control is
-// Cloud/Enterprise only and OSS answers 404 on every /api/access-control path,
-// so an unavailable API soft-skips this secondary path — team membership above
-// must keep syncing on every edition. Any other RBAC error fails closed: an
-// empty emission would read as a revoke of every role the team holds.
+// roleGrants returns the RBAC roles assigned to a team. Teams sync on every
+// Grafana edition and with any credential, so this secondary path must never
+// decide whether membership above syncs: an absent access-control API (OSS
+// answers 404 on every /api/access-control path) and a credential without
+// `roles:read` (403) both skip it. Roles are opt-in, and their own List still
+// fails closed on both, so an operator who enabled roles gets a failing sync
+// instead of silently empty assignments. Any other RBAC error fails closed
+// here too: an empty emission would read as a revoke of every role the team
+// holds.
 func (t *teamBuilder) roleGrants(ctx context.Context, resource *v2.Resource, teamID int) ([]*v2.Grant, annotations.Annotations, error) {
 	rolesByTeam, annos, err := t.client.ListRolesForTeams(ctx, []int{teamID})
 	if err != nil {
-		if errors.Is(err, grafana.ErrRBACUnavailable) {
+		if errors.Is(err, grafana.ErrRBACUnavailable) || errors.Is(err, grafana.ErrRBACForbidden) {
 			return nil, annos, nil
 		}
 		return nil, annos, fmt.Errorf("grafana-connector: failed to list roles for team %d: %w", teamID, err)
 	}
 
-	return roleGrantsForTeam(resource.Id, emitableRoleNames(rolesByTeam[resource.Id.Resource])), annos, nil
+	// Grafana keys the response with the canonical id it was sent, so look up
+	// the parsed team id rather than the raw resource string.
+	return roleGrantsForTeam(resource.Id, emitableRoleNames(rolesByTeam[strconv.Itoa(teamID)])), annos, nil
 }
 
 // emitableRoleNames keeps only the RBAC role names that roleBuilder.List would
