@@ -103,8 +103,8 @@ func (t *teamBuilder) StaticEntitlements(_ context.Context, _ *pagination.Token)
 
 // Grants emits team membership (primary) and the RBAC roles the team holds
 // (secondary). Grafana lists both per team — GET /api/teams/{id}/members and
-// POST /api/access-control/teams/roles/search scoped to this team id — so both
-// belong on the principal that carries the assignment.
+// GET /api/access-control/teams/{id}/roles — so both belong on the principal
+// that carries the assignment.
 func (t *teamBuilder) Grants(ctx context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
 	teamID, err := strconv.Atoi(resource.Id.Resource)
 	if err != nil {
@@ -145,13 +145,13 @@ func (t *teamBuilder) Grants(ctx context.Context, resource *v2.Resource, _ *pagi
 // Grafana edition and with any credential, so this secondary path must never
 // decide whether membership above syncs: an absent access-control API (OSS
 // answers 404 on every /api/access-control path) and a credential without
-// `roles:read` (403) both skip it. Roles are opt-in, and their own List still
+// `teams.roles:read` (403) both skip it. Roles are opt-in, and their own List still
 // fails closed on both, so an operator who enabled roles gets a failing sync
 // instead of silently empty assignments. Any other RBAC error fails closed
 // here too: an empty emission would read as a revoke of every role the team
 // holds.
 func (t *teamBuilder) roleGrants(ctx context.Context, resource *v2.Resource, teamID int) ([]*v2.Grant, annotations.Annotations, error) {
-	rolesByTeam, annos, err := t.client.ListRolesForTeams(ctx, []int{teamID})
+	roles, annos, err := t.client.ListRolesForTeam(ctx, teamID)
 	if err != nil {
 		if errors.Is(err, grafana.ErrRBACUnavailable) || errors.Is(err, grafana.ErrRBACForbidden) {
 			return nil, annos, nil
@@ -159,9 +159,7 @@ func (t *teamBuilder) roleGrants(ctx context.Context, resource *v2.Resource, tea
 		return nil, annos, fmt.Errorf("grafana-connector: failed to list roles for team %d: %w", teamID, err)
 	}
 
-	// Grafana keys the response with the canonical id it was sent, so look up
-	// the parsed team id rather than the raw resource string.
-	return roleGrantsForTeam(resource.Id, emitableRoleNames(rolesByTeam[strconv.Itoa(teamID)])), annos, nil
+	return roleGrantsForTeam(resource.Id, emitableRoleNames(roles)), annos, nil
 }
 
 // emitableRoleNames keeps only the RBAC role names that roleBuilder.List would

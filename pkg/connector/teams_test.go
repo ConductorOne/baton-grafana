@@ -33,7 +33,7 @@ func TestTeamListAndMemberGrants(t *testing.T) {
 			writeJSON(w, http.StatusOK, []map[string]any{
 				{"orgId": 1, "teamId": 7, "userId": 14, "email": "a@ex.com", "login": "alice", "name": "Alice", "permission": 0},
 			})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/access-control/teams/roles/search":
+		case r.Method == http.MethodGet && r.URL.Path == "/api/access-control/teams/7/roles":
 			roleSearchCalls++
 			http.NotFound(w, r)
 		default:
@@ -148,7 +148,7 @@ func TestTeamAndServiceAccountPagination(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var pages []string
 			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.Method == http.MethodPost && r.URL.Path == "/api/access-control/teams/roles/search" {
+				if strings.HasPrefix(r.URL.Path, "/api/access-control/teams/") && strings.HasSuffix(r.URL.Path, "/roles") {
 					// Pagination fixture focuses on team search paging; RBAC may be absent (OSS).
 					writeJSON(w, http.StatusNotFound, map[string]string{"message": "Not found"})
 					return
@@ -551,36 +551,22 @@ func TestRoleListErrorsWhenRBACForbidden(t *testing.T) {
 	}
 }
 
-// Team Grants emits membership plus the team's RBAC roles from a single
-// per-team search, skipping Hidden and non-IRM/OnCall roles.
+// Team Grants emits membership plus the team's RBAC roles from the documented
+// per-team GET, skipping Hidden and non-IRM/OnCall roles.
 func TestTeamGrantsEmitTeamRoleGrants(t *testing.T) {
-	var teamRoleSearchCalls int
+	var teamRoleCalls int
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/teams/7/members":
 			writeJSON(w, http.StatusOK, []map[string]any{
 				{"orgId": 1, "teamId": 7, "userId": 14, "email": "a@ex.com", "login": "alice", "name": "Alice", "permission": 0},
 			})
-		case r.Method == http.MethodPost && r.URL.Path == "/api/access-control/teams/roles/search":
-			teamRoleSearchCalls++
-			var req struct {
-				TeamIDs []int `json:"teamIds"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				t.Errorf("decode search body: %v", err)
-				http.Error(w, "bad request", http.StatusBadRequest)
-				return
-			}
-			// Only the team under sync is queried.
-			if len(req.TeamIDs) != 1 || req.TeamIDs[0] != 7 {
-				t.Errorf("teamIds=%v want [7]", req.TeamIDs)
-			}
-			writeJSON(w, http.StatusOK, map[string]any{
-				"7": []map[string]any{
-					{"uid": "vis", "name": "plugins:grafana-irm-app:schedules-editor", "displayName": "Schedules Editor"},
-					{"uid": "hid", "name": "plugins:grafana-irm-app:admin", "displayName": "Admin", "hidden": true},
-					{"uid": "fix", "name": "fixed:reports:reader", "displayName": "Report reader"},
-				},
+		case r.Method == http.MethodGet && r.URL.Path == "/api/access-control/teams/7/roles":
+			teamRoleCalls++
+			writeJSON(w, http.StatusOK, []map[string]any{
+				{"uid": "vis", "name": "plugins:grafana-irm-app:schedules-editor", "displayName": "Schedules Editor"},
+				{"uid": "hid", "name": "plugins:grafana-irm-app:admin", "displayName": "Admin", "hidden": true},
+				{"uid": "fix", "name": "fixed:reports:reader", "displayName": "Report reader"},
 			})
 		default:
 			http.NotFound(w, r)
@@ -596,8 +582,8 @@ func TestTeamGrantsEmitTeamRoleGrants(t *testing.T) {
 	if next != "" {
 		t.Fatalf("expected empty next token, got %q", next)
 	}
-	if teamRoleSearchCalls != 1 {
-		t.Fatalf("expected one team-roles search call, got %d", teamRoleSearchCalls)
+	if teamRoleCalls != 1 {
+		t.Fatalf("expected one team-roles GET, got %d", teamRoleCalls)
 	}
 	// Membership first, then the single visible IRM role (Hidden + fixed: filtered).
 	if len(grants) != 2 {
@@ -678,7 +664,7 @@ func TestTeamGrantsFailClosedOnRBACError(t *testing.T) {
 			writeJSON(w, http.StatusOK, []map[string]any{
 				{"orgId": 1, "teamId": 7, "userId": 14, "login": "alice"},
 			})
-		case "/api/access-control/teams/roles/search":
+		case "/api/access-control/teams/7/roles":
 			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "nope"})
 		default:
 			http.NotFound(w, r)
@@ -689,7 +675,7 @@ func TestTeamGrantsFailClosedOnRBACError(t *testing.T) {
 	resource := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}}
 	grants, _, _, err := newTeamBuilder(newCloudClientForTest(t, ts)).Grants(context.Background(), resource, &pagination.Token{})
 	if err == nil {
-		t.Fatal("expected a 500 from the team-roles search to fail Grants")
+		t.Fatal("expected a 500 from the team-roles GET to fail Grants")
 	}
 	if grants != nil {
 		t.Fatalf("failed Grants must not emit a partial set, got %d grants", len(grants))

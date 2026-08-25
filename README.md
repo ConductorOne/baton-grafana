@@ -133,9 +133,10 @@ Show permissions available in Grafana:
 
 - **Users** – Lists all users in Grafana, including their roles.
 - **Organizations** – Details organizations and corresponding access grants.
-- **Teams** – Grafana teams and their members.
+- **Teams** – Grafana teams and their members (`GET /api/teams/search`, `GET /api/teams/{id}/members`).
 - **Roles** *(optional)* – Grafana RBAC roles for the IRM and OnCall plugins (for example
-  Schedules Editor), including which teams hold those roles. Requires Grafana Cloud or
+  Schedules Editor), including which teams hold those roles (`GET /api/access-control/roles`,
+  `GET /api/access-control/teams/{id}/roles`). Requires Grafana Cloud or
   Enterprise; enable the Role resource type in C1 when your instance has access-control.
 - **Service accounts** – Grafana service accounts and their organization role.
 

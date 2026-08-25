@@ -40,14 +40,15 @@ field group:
      The role type is **OptInRequired** — syncing by default would fail List for
      every OSS tenant, and an empty successful List would wipe prior roles in C1.
      Each RBAC call maps its own 404 to `ErrRBACUnavailable`; there is no
-     availability probe and no cached state. A missing team is not a 404 (both
-     the per-team GET and the search POST answer 200 with an empty body), so the
+     availability probe and no cached state. A missing team is not a 404 (the
+     per-team GET answers 200 with an empty body), so the
      404 unambiguously means the API is absent. When the role type is scheduled
      and RBAC is absent (404) or not readable by the credential (403), List
-     fails closed — enabling roles without `roles:read` is meant to fail the
+     fails closed — enabling roles without `roles:read` (and without
+     `teams.roles:read` for team assignments) is meant to fail the
      sync. Grafana lists role assignments per team, so team→role grants are
      emitted by `teamBuilder.Grants` — one
-     `POST /api/access-control/teams/roles/search` scoped to the team being
+     `GET /api/access-control/teams/{id}/roles` for the team being
      synced (same current-org team scope as Teams above) — and the role type
      carries `SkipGrants`. Teams sync on every edition with any credential, so
      that secondary path soft-skips both 404 and 403: a tenant that never
@@ -169,7 +170,7 @@ API doc root: <https://grafana.com/docs/grafana/latest/developers/http_api/>
 | Operation                      | Method + path                                           | Doc                                                                                                           |
 | :----------------------------- | :------------------------------------------------------ | :------------------------------------------------------------------------------------------------------------ |
 | List roles                     | `GET /api/access-control/roles`                         | [RBAC HTTP API](https://grafana.com/docs/grafana/latest/developers/http_api/access_control/#get-all-roles)    |
-| List the roles a team holds    | `POST /api/access-control/teams/roles/search`           | [RBAC HTTP API](https://grafana.com/docs/grafana/latest/developers/http_api/access_control/)                  |
+| List the roles a team holds    | `GET /api/access-control/teams/{id}/roles`              | [RBAC HTTP API](https://grafana.com/docs/grafana/latest/developers/http_api/access_control/#list-roles-assigned-to-a-team) |
 
 ### Service accounts
 

@@ -40,7 +40,7 @@ const (
 
 	// RBAC (Cloud / Enterprise).
 	AccessControlRolesPath = "/api/access-control/roles"
-	SearchTeamRolesPath    = "/api/access-control/teams/roles/search"
+	TeamRolesPath          = "/api/access-control/teams/%d/roles"
 )
 
 // ErrTeamMemberAlreadyExists is returned when adding a user who is already on the team.
@@ -53,7 +53,7 @@ var ErrTeamMemberNotFound = errors.New("grafana-client: team member not found")
 var ErrRBACUnavailable = errors.New("grafana-client: rbac api unavailable")
 
 // ErrRBACForbidden is returned when the credential cannot read the RBAC API
-// (HTTP 403, token without `roles:read`).
+// (HTTP 403: catalog needs `roles:read`, team assignments need `teams.roles:read`).
 var ErrRBACForbidden = errors.New("grafana-client: rbac api forbidden")
 
 // ErrUserAlreadyExists is returned when attempting to create a user that already exists in Grafana.
@@ -111,11 +111,21 @@ func rbacUnavailable(err error) bool {
 }
 
 // rbacForbidden maps HTTP 403 from an access-control endpoint to
-// ErrRBACForbidden: the API exists but this credential lacks `roles:read`.
-// Callers decide what that means — the role type's own List fails closed, while
-// the team's secondary role path skips it so team membership keeps syncing.
+// ErrRBACForbidden: the API exists but this credential cannot read it.
 func rbacForbidden(err error) bool {
 	return status.Code(err) == codes.PermissionDenied
+}
+
+// wrapRBACError maps 404/403 from an access-control call onto the matching
+// sentinel and otherwise wraps with msg.
+func wrapRBACError(err error, msg string) error {
+	if rbacUnavailable(err) {
+		return fmt.Errorf("%w: %w", ErrRBACUnavailable, err)
+	}
+	if rbacForbidden(err) {
+		return fmt.Errorf("%w: %w", ErrRBACForbidden, err)
+	}
+	return fmt.Errorf("%s: %w", msg, err)
 }
 
 // ToUser converts a UserByOrgResponse into the shared User shape.
