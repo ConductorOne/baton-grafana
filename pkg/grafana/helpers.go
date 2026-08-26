@@ -172,7 +172,7 @@ func (r *ServiceAccountSearchResponse) UnmarshalJSON(data []byte) error {
 
 func (r *rolesListResponse) UnmarshalJSON(data []byte) error {
 	trimmed := bytes.TrimSpace(data)
-	if len(trimmed) == 0 {
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		*r = nil
 		return nil
 	}

@@ -128,6 +128,27 @@ func TestListRolesForTeam(t *testing.T) {
 	}
 }
 
+func TestListRolesForTeamNullBody(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("null"))
+	}))
+	defer ts.Close()
+
+	client, err := NewClient(context.Background(), ts.URL, "", "", "token")
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+
+	got, _, err := client.ListRolesForTeam(context.Background(), 2)
+	if err != nil {
+		t.Fatalf("ListRolesForTeam: %v", err)
+	}
+	if len(got) != 0 {
+		t.Fatalf("null body must decode as no roles, got %d", len(got))
+	}
+}
+
 // ListTeams owns the vendor's 1-based paging: an unset page is normalized to 1
 // and a full page yields the next page as a token string.
 func TestListTeamsNormalizesPageAndReturnsToken(t *testing.T) {
