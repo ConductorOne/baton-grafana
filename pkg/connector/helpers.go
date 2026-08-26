@@ -23,6 +23,9 @@ const (
 	teamMemberEntitlement   = "member"
 	roleAssignedEntitlement = "assigned"
 
+	// Grants page token: membership first, then team→role assignments.
+	syncRolesToken = "sync_roles"
+
 	// Role `name` prefixes from GET /api/access-control/roles for IRM and the
 	// legacy OnCall plugin. `name` is stable across stacks; `uid` is
 	// instance-specific and is required by POST/DELETE team-role endpoints.

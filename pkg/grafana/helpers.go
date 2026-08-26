@@ -102,10 +102,7 @@ func nextPageToken(pVars *PaginationVars, pageLen uint64) string {
 }
 
 // rbacUnavailable maps HTTP 404 from an access-control endpoint to
-// ErrRBACUnavailable. The whole /api/access-control route set is absent on OSS
-// builds, which answer 404 for every path in it. A missing team is not 404:
-// both the per-team GET and the search POST answer 200 with an empty body for
-// an unknown team id, so a 404 unambiguously means the API itself is absent.
+// ErrRBACUnavailable. OSS builds answer 404 on every /api/access-control path.
 func rbacUnavailable(err error) bool {
 	return status.Code(err) == codes.NotFound
 }

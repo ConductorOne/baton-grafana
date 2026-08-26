@@ -47,10 +47,10 @@ field group:
      fails closed — enabling roles without `roles:read` (and without
      `teams.roles:read` for team assignments) is meant to fail the
      sync. Grafana lists role assignments per team, so team→role grants are
-     emitted by `teamBuilder.Grants` — one
-     `GET /api/access-control/teams/{id}/roles` for the team being
-     synced (same current-org team scope as Teams above) — and the role type
-     carries `SkipGrants`. Teams sync on every edition with any credential, so
+     emitted by `teamBuilder.Grants` — membership on the first Grants page,
+     then one `GET /api/access-control/teams/{id}/roles` on a second page for
+     the team being synced (same current-org team scope as Teams above) — and
+     the role type carries `SkipEntitlementsAndGrants`. Teams sync on every edition with any credential, so
      that secondary path soft-skips both 404 and 403: a tenant that never
      enabled roles keeps syncing teams with a narrower token, and a tenant that
      did already fails on the role List above, so no incomplete c1z is ingested.

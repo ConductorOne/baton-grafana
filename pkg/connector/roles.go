@@ -103,8 +103,7 @@ func (r *roleBuilder) StaticEntitlements(_ context.Context, _ *pagination.Token)
 }
 
 // Grants is a no-op. Grafana lists role assignments per team, so team→role
-// grants are emitted from teamBuilder.Grants (the principal that carries them);
-// the role type declares SkipGrants.
+// grants are emitted from teamBuilder.Grants (the principal that carries them).
 func (r *roleBuilder) Grants(_ context.Context, _ *v2.Resource, _ *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
 	return nil, "", nil, nil
 }

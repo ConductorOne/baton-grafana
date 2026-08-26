@@ -555,10 +555,7 @@ func (c *Client) ListRoles(ctx context.Context) ([]*Role, annotations.Annotation
 }
 
 // ListRolesForTeam calls GET /api/access-control/teams/{id}/roles.
-// The documented per-team list; an unknown team id yields 200 with an empty
-// array rather than 404. HTTP 404 maps to ErrRBACUnavailable (OSS without
-// access-control) and HTTP 403 to ErrRBACForbidden (credential without
-// `teams.roles:read`).
+// HTTP 404 maps to ErrRBACUnavailable and HTTP 403 to ErrRBACForbidden.
 func (c *Client) ListRolesForTeam(ctx context.Context, teamID int) ([]*Role, annotations.Annotations, error) {
 	var roles rolesListResponse
 	annos, err := c.doRequest(

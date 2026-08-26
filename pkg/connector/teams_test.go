@@ -58,21 +58,35 @@ func TestTeamListAndMemberGrants(t *testing.T) {
 		t.Fatalf("team org_id must be a string profile value, got ok=%v value=%q", ok, orgID)
 	}
 
-	grants, _, _, err := builder.Grants(context.Background(), resources[0], &pagination.Token{})
+	grants, next, _, err := builder.Grants(context.Background(), resources[0], &pagination.Token{})
 	if err != nil {
-		t.Fatalf("Grants: %v", err)
+		t.Fatalf("Grants members: %v", err)
 	}
-	// RBAC answers 404 here (OSS), so the secondary role path soft-skips and
-	// only the membership grant survives.
+	if next != syncRolesToken {
+		t.Fatalf("expected next token %q after membership, got %q", syncRolesToken, next)
+	}
+	if roleSearchCalls != 0 {
+		t.Fatalf("membership page must not call RBAC, got %d calls", roleSearchCalls)
+	}
 	if len(grants) != 1 {
 		t.Fatalf("expected only the member grant, got %d", len(grants))
 	}
 	if grants[0].Entitlement.Resource.Id.ResourceType != resourceTypeTeam.Id || grants[0].Principal.Id.Resource != "14" {
 		t.Fatalf("unexpected member grant: %+v", grants[0])
 	}
-	// One search per team — List must not touch RBAC at all.
+
+	roleGrants, next, _, err := builder.Grants(context.Background(), resources[0], &pagination.Token{Token: next})
+	if err != nil {
+		t.Fatalf("Grants roles: %v", err)
+	}
+	if next != "" {
+		t.Fatalf("expected empty next token after roles, got %q", next)
+	}
+	if len(roleGrants) != 0 {
+		t.Fatalf("OSS 404 must emit no role grants, got %d", len(roleGrants))
+	}
 	if roleSearchCalls != 1 {
-		t.Fatalf("expected one RBAC search from team Grants, got %d calls", roleSearchCalls)
+		t.Fatalf("expected one RBAC GET from the roles page, got %d calls", roleSearchCalls)
 	}
 }
 
@@ -384,11 +398,8 @@ func TestRoleStaticEntitlements(t *testing.T) {
 	}
 
 	roleTypeAnnos := annotations.Annotations(resourceTypeRole.Annotations)
-	if !roleTypeAnnos.Contains(&v2.SkipEntitlements{}) {
-		t.Fatal("role resource type must carry SkipEntitlements with StaticEntitlements")
-	}
-	if !roleTypeAnnos.Contains(&v2.SkipGrants{}) {
-		t.Fatal("role resource type must carry SkipGrants: team→role grants come from teamBuilder.Grants")
+	if !roleTypeAnnos.Contains(&v2.SkipEntitlementsAndGrants{}) {
+		t.Fatal("role resource type must carry SkipEntitlementsAndGrants")
 	}
 	if roleTypeAnnos.Contains(&v2.TypeScopedGrants{}) {
 		t.Fatal("role resource type must not carry TypeScopedGrants: Grafana lists role assignments per team")
@@ -575,9 +586,24 @@ func TestTeamGrantsEmitTeamRoleGrants(t *testing.T) {
 	defer ts.Close()
 
 	resource := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}}
-	grants, next, _, err := newTeamBuilder(newCloudClientForTest(t, ts)).Grants(context.Background(), resource, &pagination.Token{})
+	builder := newTeamBuilder(newCloudClientForTest(t, ts))
+	members, next, _, err := builder.Grants(context.Background(), resource, &pagination.Token{})
 	if err != nil {
-		t.Fatalf("Grants: %v", err)
+		t.Fatalf("Grants members: %v", err)
+	}
+	if next != syncRolesToken {
+		t.Fatalf("expected next token %q, got %q", syncRolesToken, next)
+	}
+	if teamRoleCalls != 0 {
+		t.Fatalf("membership page must not call team-roles, got %d", teamRoleCalls)
+	}
+	if len(members) != 1 || members[0].Principal.Id.Resource != "14" {
+		t.Fatalf("unexpected member grant: %+v", members)
+	}
+
+	grants, next, _, err := builder.Grants(context.Background(), resource, &pagination.Token{Token: next})
+	if err != nil {
+		t.Fatalf("Grants roles: %v", err)
 	}
 	if next != "" {
 		t.Fatalf("expected empty next token, got %q", next)
@@ -585,15 +611,11 @@ func TestTeamGrantsEmitTeamRoleGrants(t *testing.T) {
 	if teamRoleCalls != 1 {
 		t.Fatalf("expected one team-roles GET, got %d", teamRoleCalls)
 	}
-	// Membership first, then the single visible IRM role (Hidden + fixed: filtered).
-	if len(grants) != 2 {
-		t.Fatalf("expected member grant + 1 role grant, got %d", len(grants))
-	}
-	if grants[0].Entitlement.Resource.Id.ResourceType != resourceTypeTeam.Id || grants[0].Principal.Id.Resource != "14" {
-		t.Fatalf("unexpected member grant: %+v", grants[0])
+	if len(grants) != 1 {
+		t.Fatalf("expected 1 role grant, got %d", len(grants))
 	}
 
-	g := grants[1]
+	g := grants[0]
 	if g.Entitlement.Resource.Id.ResourceType != resourceTypeRole.Id ||
 		g.Entitlement.Resource.Id.Resource != "plugins:grafana-irm-app:schedules-editor" {
 		t.Fatalf("unexpected role entitlement: %+v", g.Entitlement.Resource.Id)
@@ -622,11 +644,6 @@ func TestTeamGrantsEmitTeamRoleGrants(t *testing.T) {
 	}
 }
 
-// Teams sync on every edition and with any credential, so neither an absent
-// access-control API (OSS: 404) nor a credential without `roles:read` (403) may
-// stop team membership. Roles are opt-in and their own List fails closed on
-// both, so an operator who enabled roles still gets a failing sync rather than
-// silently empty assignments.
 func TestTeamGrantsSoftSkipWhenRolesUnreadable(t *testing.T) {
 	for _, code := range []int{http.StatusNotFound, http.StatusForbidden} {
 		t.Run(strconv.Itoa(code), func(t *testing.T) {
@@ -643,20 +660,28 @@ func TestTeamGrantsSoftSkipWhenRolesUnreadable(t *testing.T) {
 			defer ts.Close()
 
 			resource := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}}
-			grants, _, _, err := newTeamBuilder(newCloudClientForTest(t, ts)).Grants(context.Background(), resource, &pagination.Token{})
+			builder := newTeamBuilder(newCloudClientForTest(t, ts))
+			members, next, _, err := builder.Grants(context.Background(), resource, &pagination.Token{})
 			if err != nil {
-				t.Fatalf("Grants: %v", err)
+				t.Fatalf("Grants members: %v", err)
 			}
-			if len(grants) != 1 || grants[0].Principal.Id.Resource != "14" {
-				t.Fatalf("expected only the member grant for user 14, got %+v", grants)
+			if len(members) != 1 || members[0].Principal.Id.Resource != "14" {
+				t.Fatalf("expected only the member grant for user 14, got %+v", members)
+			}
+			roleGrants, next, _, err := builder.Grants(context.Background(), resource, &pagination.Token{Token: next})
+			if err != nil {
+				t.Fatalf("Grants roles: %v", err)
+			}
+			if next != "" {
+				t.Fatalf("expected empty next token, got %q", next)
+			}
+			if len(roleGrants) != 0 {
+				t.Fatalf("unreadable RBAC must emit no role grants, got %+v", roleGrants)
 			}
 		})
 	}
 }
 
-// An RBAC error that is neither "API absent" nor "not permitted" must fail the
-// whole Grants call — emitting membership alone would read as a revoke of the
-// team's role grants.
 func TestTeamGrantsFailClosedOnRBACError(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -673,9 +698,17 @@ func TestTeamGrantsFailClosedOnRBACError(t *testing.T) {
 	defer ts.Close()
 
 	resource := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}}
-	grants, _, _, err := newTeamBuilder(newCloudClientForTest(t, ts)).Grants(context.Background(), resource, &pagination.Token{})
+	builder := newTeamBuilder(newCloudClientForTest(t, ts))
+	members, next, _, err := builder.Grants(context.Background(), resource, &pagination.Token{})
+	if err != nil {
+		t.Fatalf("membership page must succeed when only roles fail: %v", err)
+	}
+	if len(members) != 1 || next != syncRolesToken {
+		t.Fatalf("members=%d next=%q", len(members), next)
+	}
+	grants, _, _, err := builder.Grants(context.Background(), resource, &pagination.Token{Token: next})
 	if err == nil {
-		t.Fatal("expected a 500 from the team-roles GET to fail Grants")
+		t.Fatal("expected a 500 from the team-roles GET to fail the roles page")
 	}
 	if grants != nil {
 		t.Fatalf("failed Grants must not emit a partial set, got %d grants", len(grants))

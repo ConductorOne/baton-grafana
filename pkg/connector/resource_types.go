@@ -26,11 +26,7 @@ var (
 		Id:          "role",
 		DisplayName: "Role",
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_ROLE},
-		// Grafana lists role assignments per team, so team→role grants are
-		// emitted from teamBuilder.Grants and the role side never emits its own
-		// (SkipGrants). StaticEntitlements provides the assignment entitlement,
-		// hence SkipEntitlements (no per-role entitlement list).
-		Annotations: annotations.New(&v2.SkipEntitlements{}, &v2.SkipGrants{}, &v2.OptInRequired{}),
+		Annotations: annotations.New(&v2.SkipEntitlementsAndGrants{}, &v2.OptInRequired{}),
 	}
 	resourceTypeServiceAccount = &v2.ResourceType{
 		Id:          "service_account",

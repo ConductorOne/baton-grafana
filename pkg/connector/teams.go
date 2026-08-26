@@ -101,14 +101,29 @@ func (t *teamBuilder) StaticEntitlements(_ context.Context, _ *pagination.Token)
 	}, "", nil, nil
 }
 
-// Grants emits team membership (primary) and the RBAC roles the team holds
-// (secondary). Grafana lists both per team — GET /api/teams/{id}/members and
-// GET /api/access-control/teams/{id}/roles — so both belong on the principal
-// that carries the assignment.
-func (t *teamBuilder) Grants(ctx context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
+// Grants emits team membership on the first page
+// (GET /api/teams/{id}/members), then the team's RBAC roles on a second page
+// (GET /api/access-control/teams/{id}/roles).
+func (t *teamBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
 	teamID, err := strconv.Atoi(resource.Id.Resource)
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("grafana-connector: invalid team id %q: %w", resource.Id.Resource, err)
+	}
+
+	page := ""
+	if pToken != nil {
+		page = pToken.Token
+	}
+	switch page {
+	case syncRolesToken:
+		roleGrants, annos, err := t.roleGrants(ctx, resource, teamID)
+		if err != nil {
+			return nil, "", annos, err
+		}
+		return roleGrants, "", annos, nil
+	case "":
+	default:
+		return nil, "", nil, fmt.Errorf("grafana-connector: unexpected team grants page token %q", page)
 	}
 
 	members, annos, err := t.client.ListTeamMembers(ctx, teamID)
@@ -128,28 +143,11 @@ func (t *teamBuilder) Grants(ctx context.Context, resource *v2.Resource, _ *pagi
 		grants = append(grants, grant.NewGrant(resource, teamMemberEntitlement, principalID))
 	}
 
-	roleGrants, roleAnnos, err := t.roleGrants(ctx, resource, teamID)
-	// Update (don't append) so a single RateLimitDescription survives Pick.
-	var roleRL v2.RateLimitDescription
-	if ok, pickErr := roleAnnos.Pick(&roleRL); pickErr == nil && ok {
-		annos.WithRateLimiting(&roleRL)
-	}
-	if err != nil {
-		return nil, "", annos, err
-	}
-
-	return append(grants, roleGrants...), "", annos, nil
+	return grants, syncRolesToken, annos, nil
 }
 
-// roleGrants returns the RBAC roles assigned to a team. Teams sync on every
-// Grafana edition and with any credential, so this secondary path must never
-// decide whether membership above syncs: an absent access-control API (OSS
-// answers 404 on every /api/access-control path) and a credential without
-// `teams.roles:read` (403) both skip it. Roles are opt-in, and their own List still
-// fails closed on both, so an operator who enabled roles gets a failing sync
-// instead of silently empty assignments. Any other RBAC error fails closed
-// here too: an empty emission would read as a revoke of every role the team
-// holds.
+// roleGrants lists the RBAC roles assigned to this team. HTTP 404 and 403
+// skip with no grants; any other error fails the call.
 func (t *teamBuilder) roleGrants(ctx context.Context, resource *v2.Resource, teamID int) ([]*v2.Grant, annotations.Annotations, error) {
 	roles, annos, err := t.client.ListRolesForTeam(ctx, teamID)
 	if err != nil {
