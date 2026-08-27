@@ -14,6 +14,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 func TestTeamListAndMemberGrants(t *testing.T) {
@@ -644,55 +646,17 @@ func TestTeamGrantsEmitTeamRoleGrants(t *testing.T) {
 	}
 }
 
-func TestTeamGrantsSoftSkipWhenRolesUnreadable(t *testing.T) {
-	for _, code := range []int{http.StatusNotFound, http.StatusForbidden} {
-		t.Run(strconv.Itoa(code), func(t *testing.T) {
-			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				switch r.URL.Path {
-				case "/api/teams/7/members":
-					writeJSON(w, http.StatusOK, []map[string]any{
-						{"orgId": 1, "teamId": 7, "userId": 14, "email": "a@ex.com", "login": "alice", "name": "Alice", "permission": 0},
-					})
-				default:
-					writeJSON(w, code, map[string]string{"message": "nope"})
-				}
-			}))
-			defer ts.Close()
-
-			resource := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}}
-			builder := newTeamBuilder(newCloudClientForTest(t, ts))
-			members, next, _, err := builder.Grants(context.Background(), resource, &pagination.Token{})
-			if err != nil {
-				t.Fatalf("Grants members: %v", err)
-			}
-			if len(members) != 1 || members[0].Principal.Id.Resource != "14" {
-				t.Fatalf("expected only the member grant for user 14, got %+v", members)
-			}
-			roleGrants, next, _, err := builder.Grants(context.Background(), resource, &pagination.Token{Token: next})
-			if err != nil {
-				t.Fatalf("Grants roles: %v", err)
-			}
-			if next != "" {
-				t.Fatalf("expected empty next token, got %q", next)
-			}
-			if len(roleGrants) != 0 {
-				t.Fatalf("unreadable RBAC must emit no role grants, got %+v", roleGrants)
-			}
-		})
-	}
-}
-
-func TestTeamGrantsFailClosedOnRBACError(t *testing.T) {
+// A 404 on the access-control path means the instance has no RBAC API at all,
+// so the roles page skips instead of failing the whole sync.
+func TestTeamGrantsSkipWhenRBACUnavailable(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/teams/7/members":
 			writeJSON(w, http.StatusOK, []map[string]any{
-				{"orgId": 1, "teamId": 7, "userId": 14, "login": "alice"},
+				{"orgId": 1, "teamId": 7, "userId": 14, "email": "a@ex.com", "login": "alice", "name": "Alice", "permission": 0},
 			})
-		case "/api/access-control/teams/7/roles":
-			writeJSON(w, http.StatusInternalServerError, map[string]string{"message": "nope"})
 		default:
-			http.NotFound(w, r)
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "nope"})
 		}
 	}))
 	defer ts.Close()
@@ -701,16 +665,65 @@ func TestTeamGrantsFailClosedOnRBACError(t *testing.T) {
 	builder := newTeamBuilder(newCloudClientForTest(t, ts))
 	members, next, _, err := builder.Grants(context.Background(), resource, &pagination.Token{})
 	if err != nil {
-		t.Fatalf("membership page must succeed when only roles fail: %v", err)
+		t.Fatalf("Grants members: %v", err)
 	}
-	if len(members) != 1 || next != syncRolesToken {
-		t.Fatalf("members=%d next=%q", len(members), next)
+	if len(members) != 1 || members[0].Principal.Id.Resource != "14" {
+		t.Fatalf("expected only the member grant for user 14, got %+v", members)
 	}
-	grants, _, _, err := builder.Grants(context.Background(), resource, &pagination.Token{Token: next})
-	if err == nil {
-		t.Fatal("expected a 500 from the team-roles GET to fail the roles page")
+	roleGrants, next, _, err := builder.Grants(context.Background(), resource, &pagination.Token{Token: next})
+	if err != nil {
+		t.Fatalf("Grants roles: %v", err)
 	}
-	if grants != nil {
-		t.Fatalf("failed Grants must not emit a partial set, got %d grants", len(grants))
+	if next != "" {
+		t.Fatalf("expected empty next token, got %q", next)
+	}
+	if len(roleGrants) != 0 {
+		t.Fatalf("missing RBAC api must emit no role grants, got %+v", roleGrants)
+	}
+}
+
+// Anything other than a 404 fails the roles page. A 403 in particular means the
+// API is there and rejected this credential, so emitting an empty set would
+// read to C1 as a revoke of every team role assignment.
+func TestTeamGrantsFailClosedOnRBACError(t *testing.T) {
+	for code, wantGRPC := range map[int]codes.Code{
+		http.StatusForbidden:           codes.PermissionDenied,
+		http.StatusInternalServerError: codes.Unavailable,
+	} {
+		t.Run(strconv.Itoa(code), func(t *testing.T) {
+			ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/api/teams/7/members":
+					writeJSON(w, http.StatusOK, []map[string]any{
+						{"orgId": 1, "teamId": 7, "userId": 14, "login": "alice"},
+					})
+				case "/api/access-control/teams/7/roles":
+					writeJSON(w, code, map[string]string{"message": "nope"})
+				default:
+					http.NotFound(w, r)
+				}
+			}))
+			defer ts.Close()
+
+			resource := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}}
+			builder := newTeamBuilder(newCloudClientForTest(t, ts))
+			members, next, _, err := builder.Grants(context.Background(), resource, &pagination.Token{})
+			if err != nil {
+				t.Fatalf("membership page must succeed when only roles fail: %v", err)
+			}
+			if len(members) != 1 || next != syncRolesToken {
+				t.Fatalf("members=%d next=%q", len(members), next)
+			}
+			grants, _, _, err := builder.Grants(context.Background(), resource, &pagination.Token{Token: next})
+			if err == nil {
+				t.Fatalf("expected a %d from the team-roles GET to fail the roles page", code)
+			}
+			if got := status.Code(err); got != wantGRPC {
+				t.Fatalf("wrapping must preserve the gRPC code: got %v, want %v", got, wantGRPC)
+			}
+			if grants != nil {
+				t.Fatalf("failed Grants must not emit a partial set, got %d grants", len(grants))
+			}
+		})
 	}
 }

@@ -13,6 +13,8 @@ import (
 	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
+	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
+	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -146,14 +148,24 @@ func (t *teamBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 	return grants, syncRolesToken, annos, nil
 }
 
-// roleGrants lists the RBAC roles assigned to this team. HTTP 404 and 403
-// skip with no grants; any other error fails the call.
+// roleGrants lists the RBAC roles assigned to this team. A 404 means the
+// instance has no access-control API at all, so there is nothing to emit and
+// the page skips. Every other failure — including a 403 from a credential
+// missing `teams.roles:read` — fails the page: emitting zero grants would tell
+// C1 that every team's role assignments were revoked.
 func (t *teamBuilder) roleGrants(ctx context.Context, resource *v2.Resource, teamID int) ([]*v2.Grant, annotations.Annotations, error) {
 	roles, annos, err := t.client.ListRolesForTeam(ctx, teamID)
-	if err != nil {
-		if errors.Is(err, grafana.ErrRBACUnavailable) || errors.Is(err, grafana.ErrRBACForbidden) {
-			return nil, annos, nil
-		}
+	switch {
+	case err == nil:
+	case errors.Is(err, grafana.ErrRBACUnavailable):
+		ctxzap.Extract(ctx).Debug(
+			"grafana-connector: access-control api unavailable; skipping team role grants",
+			zap.Int("team_id", teamID),
+		)
+		return nil, annos, nil
+	case errors.Is(err, grafana.ErrRBACForbidden):
+		return nil, annos, fmt.Errorf("grafana-connector: failed to list roles for team %d: the credential is missing the `teams.roles:read` permission: %w", teamID, err)
+	default:
 		return nil, annos, fmt.Errorf("grafana-connector: failed to list roles for team %d: %w", teamID, err)
 	}
 

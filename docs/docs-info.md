@@ -50,13 +50,15 @@ field group:
      emitted by `teamBuilder.Grants` — membership on the first Grants page,
      then one `GET /api/access-control/teams/{id}/roles` on a second page for
      the team being synced (same current-org team scope as Teams above) — and
-     the role type carries `SkipEntitlementsAndGrants`. Teams sync on every edition with any credential, so
-     that secondary path soft-skips both 404 and 403: a tenant that never
-     enabled roles keeps syncing teams with a narrower token, and a tenant that
-     did already fails on the role List above, so no incomplete c1z is ingested.
-     Every other RBAC error fails the call closed (an empty successful emission
-     would wipe prior assignments). Grants are **immutable** (C1 cannot
-     provision non-user principals). Operators enable roles in the C1 UI when
+     the role type carries `SkipEntitlementsAndGrants`. That roles page skips
+     only on 404, which means the instance has no access-control API at all and
+     there is nothing to emit — this is what keeps teams syncing on OSS. A 403
+     fails the page closed and names the missing `teams.roles:read`: the
+     permission is distinct from the `roles:read` that gates the role List, so a
+     credential can pass List and still be rejected here, and returning an empty
+     set would read to C1 as a revoke of every team role assignment. Every other
+     RBAC error fails closed for the same reason. Grants are **immutable** (C1
+     cannot provision non-user principals). Operators enable roles in the C1 UI when
      they have Cloud/Enterprise.
    - Service accounts — `GET /api/serviceaccounts/search`, also scoped to the
      credential's **current organization** (same caveat as Teams on multi-org
