@@ -33,8 +33,43 @@ func TestRBACEndpointsMapNotFoundToUnavailable(t *testing.T) {
 	if _, _, err := client.ListRoles(ctx); !errors.Is(err, ErrRBACUnavailable) {
 		t.Fatalf("ListRoles: %v", err)
 	}
-	if _, _, err := client.ListRolesForTeams(ctx, []int{7}); !errors.Is(err, ErrRBACUnavailable) {
-		t.Fatalf("ListRolesForTeams: %v", err)
+	if _, _, err := client.ListRolesForTeam(ctx, 7); !errors.Is(err, ErrRBACUnavailable) {
+		t.Fatalf("ListRolesForTeam: %v", err)
+	}
+	if calls != 2 {
+		t.Fatalf("expected one call per method, got %d", calls)
+	}
+}
+
+// A credential without `roles:read` / `teams.roles:read` gets 403 on every
+// RBAC path. That is a distinct condition from an absent API, so it maps to
+// its own sentinel and each caller decides: the role List fails, the team's
+// role path skips.
+func TestRBACEndpointsMapForbiddenToForbidden(t *testing.T) {
+	var calls int
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusForbidden)
+		_ = json.NewEncoder(w).Encode(map[string]string{"message": "Access denied"})
+	}))
+	defer ts.Close()
+
+	client, err := NewClient(context.Background(), ts.URL, "", "", "token")
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
+	}
+	ctx := context.Background()
+
+	if _, _, err := client.ListRoles(ctx); !errors.Is(err, ErrRBACForbidden) {
+		t.Fatalf("ListRoles: %v", err)
+	}
+	_, _, teamsErr := client.ListRolesForTeam(ctx, 7)
+	if !errors.Is(teamsErr, ErrRBACForbidden) {
+		t.Fatalf("ListRolesForTeam: %v", teamsErr)
+	}
+	if errors.Is(teamsErr, ErrRBACUnavailable) {
+		t.Fatal("403 must not map to ErrRBACUnavailable")
 	}
 	if calls != 2 {
 		t.Fatalf("expected one call per method, got %d", calls)
@@ -56,7 +91,7 @@ func TestRBACEndpointsServerErrorIsNotUnavailable(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	_, _, err = client.ListRolesForTeams(context.Background(), []int{7})
+	_, _, err = client.ListRolesForTeam(context.Background(), 7)
 	if err == nil {
 		t.Fatal("expected error on 500")
 	}
@@ -65,34 +100,17 @@ func TestRBACEndpointsServerErrorIsNotUnavailable(t *testing.T) {
 	}
 }
 
-func TestListRolesForTeams(t *testing.T) {
+func TestListRolesForTeam(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/access-control/teams/roles/search":
-			if r.Method != http.MethodPost {
-				t.Errorf("method=%s", r.Method)
-			}
-			var req struct {
-				TeamIDs []int `json:"teamIds"`
-			}
-			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				t.Errorf("decode: %v", err)
-				http.Error(w, "bad request", http.StatusBadRequest)
-				return
-			}
-			if len(req.TeamIDs) != 2 || req.TeamIDs[0] != 2 || req.TeamIDs[1] != 9 {
-				t.Errorf("teamIds=%v", req.TeamIDs)
-			}
-			w.Header().Set("Content-Type", "application/json")
-			_ = json.NewEncoder(w).Encode(map[string]any{
-				"2": []map[string]any{
-					{"uid": "u1", "name": "plugins:grafana-irm-app:schedules-editor", "displayName": "Schedules Editor"},
-				},
-				"9": []map[string]any{},
-			})
-		default:
+		if r.Method != http.MethodGet || r.URL.Path != "/api/access-control/teams/2/roles" {
+			t.Errorf("unexpected %s %s", r.Method, r.URL.Path)
 			http.NotFound(w, r)
+			return
 		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode([]map[string]any{
+			{"uid": "u1", "name": "plugins:grafana-irm-app:schedules-editor", "displayName": "Schedules Editor"},
+		})
 	}))
 	defer ts.Close()
 
@@ -101,23 +119,33 @@ func TestListRolesForTeams(t *testing.T) {
 		t.Fatalf("NewClient: %v", err)
 	}
 
-	got, _, err := client.ListRolesForTeams(context.Background(), []int{2, 9})
+	got, _, err := client.ListRolesForTeam(context.Background(), 2)
 	if err != nil {
-		t.Fatalf("ListRolesForTeams: %v", err)
+		t.Fatalf("ListRolesForTeam: %v", err)
 	}
-	if len(got["2"]) != 1 || got["2"][0].Name != "plugins:grafana-irm-app:schedules-editor" {
-		t.Fatalf("team 2 roles=%v", got["2"])
+	if len(got) != 1 || got[0].Name != "plugins:grafana-irm-app:schedules-editor" {
+		t.Fatalf("roles=%v", got)
 	}
-	if roles, ok := got["9"]; !ok || len(roles) != 0 {
-		t.Fatalf("team 9 roles=%v ok=%v", roles, ok)
+}
+
+func TestListRolesForTeamNullBody(t *testing.T) {
+	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte("null"))
+	}))
+	defer ts.Close()
+
+	client, err := NewClient(context.Background(), ts.URL, "", "", "token")
+	if err != nil {
+		t.Fatalf("NewClient: %v", err)
 	}
 
-	empty, _, err := client.ListRolesForTeams(context.Background(), nil)
+	got, _, err := client.ListRolesForTeam(context.Background(), 2)
 	if err != nil {
-		t.Fatalf("empty ListRolesForTeams: %v", err)
+		t.Fatalf("ListRolesForTeam: %v", err)
 	}
-	if len(empty) != 0 {
-		t.Fatalf("empty map len=%d", len(empty))
+	if len(got) != 0 {
+		t.Fatalf("null body must decode as no roles, got %d", len(got))
 	}
 }
 

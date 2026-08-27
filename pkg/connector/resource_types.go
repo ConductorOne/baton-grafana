@@ -26,12 +26,7 @@ var (
 		Id:          "role",
 		DisplayName: "Role",
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_ROLE},
-		// TypeScopedGrants: team→role assignments are emitted once per sync by
-		// roleBuilder.GrantsForResourceType. The SDK only schedules that op when
-		// the role type is in the sync, so OptIn-off tenants never mint grants
-		// against unsynced role entitlements. StaticEntitlements still provides
-		// the assignment entitlement, hence SkipEntitlements (no per-role list).
-		Annotations: annotations.New(&v2.SkipEntitlements{}, &v2.TypeScopedGrants{}, &v2.OptInRequired{}),
+		Annotations: annotations.New(&v2.SkipEntitlementsAndGrants{}, &v2.OptInRequired{}),
 	}
 	resourceTypeServiceAccount = &v2.ResourceType{
 		Id:          "service_account",

@@ -535,7 +535,8 @@ func (c *Client) ListServiceAccounts(ctx context.Context, pVars *PaginationVars)
 
 // ListRoles calls GET /api/access-control/roles.
 // The endpoint returns all roles in one response and is not paginated.
-// HTTP 404 maps to ErrRBACUnavailable (OSS build without access-control).
+// HTTP 404 maps to ErrRBACUnavailable (OSS build without access-control) and
+// HTTP 403 to ErrRBACForbidden (credential without `roles:read`).
 func (c *Client) ListRoles(ctx context.Context) ([]*Role, annotations.Annotations, error) {
 	var roles rolesListResponse
 	annos, err := c.doRequest(
@@ -547,43 +548,26 @@ func (c *Client) ListRoles(ctx context.Context) ([]*Role, annotations.Annotation
 		nil,
 	)
 	if err != nil {
-		if rbacUnavailable(err) {
-			return nil, annos, fmt.Errorf("%w: %w", ErrRBACUnavailable, err)
-		}
-		return nil, annos, fmt.Errorf("grafana-client: list roles: %w", err)
+		return nil, annos, wrapRBACError(err, "grafana-client: list roles")
 	}
 
 	return []*Role(roles), annos, nil
 }
 
-// ListRolesForTeams calls POST /api/access-control/teams/roles/search with
-// {"teamIds":[...]}. The response is keyed by team id string → []*Role, and an
-// unknown team id yields an empty response rather than an error. An empty
-// teamIDs slice returns an empty map without calling the API. HTTP 404 maps to
-// ErrRBACUnavailable (OSS build without access-control).
-func (c *Client) ListRolesForTeams(ctx context.Context, teamIDs []int) (map[string][]*Role, annotations.Annotations, error) {
-	if len(teamIDs) == 0 {
-		return map[string][]*Role{}, nil, nil
-	}
-
-	var rolesByTeam map[string][]*Role
-	req := &ListRolesForTeamsRequest{TeamIDs: teamIDs}
+// ListRolesForTeam calls GET /api/access-control/teams/{id}/roles.
+// HTTP 404 maps to ErrRBACUnavailable and HTTP 403 to ErrRBACForbidden.
+func (c *Client) ListRolesForTeam(ctx context.Context, teamID int) ([]*Role, annotations.Annotations, error) {
+	var roles rolesListResponse
 	annos, err := c.doRequest(
 		ctx,
-		http.MethodPost,
-		c.buildResourceURL(SearchTeamRolesPath),
-		&rolesByTeam,
-		req,
+		http.MethodGet,
+		c.buildResourceURL(TeamRolesPath, teamID),
+		&roles,
+		nil,
 		nil,
 	)
 	if err != nil {
-		if rbacUnavailable(err) {
-			return nil, annos, fmt.Errorf("%w: %w", ErrRBACUnavailable, err)
-		}
-		return nil, annos, fmt.Errorf("grafana-client: list roles for teams: %w", err)
+		return nil, annos, wrapRBACError(err, "grafana-client: list roles for team")
 	}
-	if rolesByTeam == nil {
-		return map[string][]*Role{}, annos, nil
-	}
-	return rolesByTeam, annos, nil
+	return []*Role(roles), annos, nil
 }

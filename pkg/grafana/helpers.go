@@ -40,7 +40,7 @@ const (
 
 	// RBAC (Cloud / Enterprise).
 	AccessControlRolesPath = "/api/access-control/roles"
-	SearchTeamRolesPath    = "/api/access-control/teams/roles/search"
+	TeamRolesPath          = "/api/access-control/teams/%d/roles"
 )
 
 // ErrTeamMemberAlreadyExists is returned when adding a user who is already on the team.
@@ -51,6 +51,10 @@ var ErrTeamMemberNotFound = errors.New("grafana-client: team member not found")
 
 // ErrRBACUnavailable is returned when the RBAC API is not available (OSS without Enterprise).
 var ErrRBACUnavailable = errors.New("grafana-client: rbac api unavailable")
+
+// ErrRBACForbidden is returned when the credential cannot read the RBAC API
+// (HTTP 403: catalog needs `roles:read`, team assignments need `teams.roles:read`).
+var ErrRBACForbidden = errors.New("grafana-client: rbac api forbidden")
 
 // ErrUserAlreadyExists is returned when attempting to create a user that already exists in Grafana.
 var ErrUserAlreadyExists = errors.New("grafana-client: user already exists")
@@ -98,12 +102,27 @@ func nextPageToken(pVars *PaginationVars, pageLen uint64) string {
 }
 
 // rbacUnavailable maps HTTP 404 from an access-control endpoint to
-// ErrRBACUnavailable. The whole /api/access-control route set is absent on OSS
-// builds, which answer 404 for every path in it. A missing team is not 404:
-// both the per-team GET and the search POST answer 200 with an empty body for
-// an unknown team id, so a 404 unambiguously means the API itself is absent.
+// ErrRBACUnavailable. OSS builds answer 404 on every /api/access-control path.
 func rbacUnavailable(err error) bool {
 	return status.Code(err) == codes.NotFound
+}
+
+// rbacForbidden maps HTTP 403 from an access-control endpoint to
+// ErrRBACForbidden: the API exists but this credential cannot read it.
+func rbacForbidden(err error) bool {
+	return status.Code(err) == codes.PermissionDenied
+}
+
+// wrapRBACError maps 404/403 from an access-control call onto the matching
+// sentinel and otherwise wraps with msg.
+func wrapRBACError(err error, msg string) error {
+	if rbacUnavailable(err) {
+		return fmt.Errorf("%w: %w", ErrRBACUnavailable, err)
+	}
+	if rbacForbidden(err) {
+		return fmt.Errorf("%w: %w", ErrRBACForbidden, err)
+	}
+	return fmt.Errorf("%s: %w", msg, err)
 }
 
 // ToUser converts a UserByOrgResponse into the shared User shape.
@@ -153,7 +172,7 @@ func (r *ServiceAccountSearchResponse) UnmarshalJSON(data []byte) error {
 
 func (r *rolesListResponse) UnmarshalJSON(data []byte) error {
 	trimmed := bytes.TrimSpace(data)
-	if len(trimmed) == 0 {
+	if len(trimmed) == 0 || bytes.Equal(trimmed, []byte("null")) {
 		*r = nil
 		return nil
 	}

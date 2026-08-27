@@ -176,9 +176,3 @@ type Role struct {
 // a JSON array. Some mocks redirect the list path into a role-detail wrapper
 // object ({"permissions":[]}); treat that as an empty catalog.
 type rolesListResponse []*Role
-
-// ListRolesForTeamsRequest is the body for
-// POST /api/access-control/teams/roles/search.
-type ListRolesForTeamsRequest struct {
-	TeamIDs []int `json:"teamIds"`
-}
