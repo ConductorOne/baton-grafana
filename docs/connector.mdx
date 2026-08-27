@@ -94,7 +94,7 @@ To create a service account token:
 3. Open the new service account and click **Add service account token**.
 4. Copy and save the generated token — it will not be shown again.
 
-Use an **Admin** service-account role (or equivalent permissions covering `teams:read`, `serviceaccounts:read`, and when Role sync is enabled `roles:read` plus `teams.roles:read`). A narrower token that previously synced only users/orgs may fail List after this upgrade.
+Use an **Admin** service-account role (or equivalent permissions covering `teams:read`, `teams.roles:read`, and `serviceaccounts:read`; Role sync additionally needs `roles:read`). Team sync reads each team's RBAC roles, so `teams.roles:read` is required even with Role sync turned off. A narrower token that previously synced only users/orgs may fail List after this upgrade.
 
 You will need:
 
@@ -111,7 +111,7 @@ You will need:
 * The username and password for a Grafana account with **admin-level permissions**
 * Your Grafana instance URL
 
-When Role sync is enabled (Grafana Enterprise), that account also needs `roles:read` plus `teams.roles:read`. On OSS, leave Role sync disabled — the access-control API is not present.
+On Grafana Enterprise that account also needs `teams.roles:read`, which team sync reads for every team, plus `roles:read` when Role sync is enabled. On OSS, leave Role sync disabled — the access-control API is not present, and the connector skips that step instead of failing.
 
 **Done.** Next, move on to the connector configuration instructions.
 </Tab>
