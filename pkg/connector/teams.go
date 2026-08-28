@@ -9,7 +9,7 @@ import (
 	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
-	"github.com/conductorone/baton-sdk/pkg/pagination"
+	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
@@ -19,12 +19,15 @@ import (
 	"google.golang.org/grpc/status"
 )
 
+var _ connectorbuilder.ResourceSyncerV2 = (*teamBuilder)(nil)
+
 type teamBuilder struct {
-	client *grafana.Client
+	client    *grafana.Client
+	syncRoles bool // false skips the team→role Grants page
 }
 
-func newTeamBuilder(client *grafana.Client) *teamBuilder {
-	return &teamBuilder{client: client}
+func newTeamBuilder(client *grafana.Client, syncRoles bool) *teamBuilder {
+	return &teamBuilder{client: client, syncRoles: syncRoles}
 }
 
 func (t *teamBuilder) ResourceType(_ context.Context) *v2.ResourceType {
@@ -49,10 +52,10 @@ func teamResource(team *grafana.Team) (*v2.Resource, error) {
 	)
 }
 
-func (t *teamBuilder) List(ctx context.Context, _ *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
-	bag, page, err := parsePageToken(pToken, &v2.ResourceId{ResourceType: resourceTypeTeam.Id})
+func (t *teamBuilder) List(ctx context.Context, _ *v2.ResourceId, attrs rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
+	bag, page, err := parsePageToken(&attrs.PageToken, &v2.ResourceId{ResourceType: resourceTypeTeam.Id})
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("grafana-connector: failed to parse page token: %w", err)
+		return nil, nil, fmt.Errorf("grafana-connector: failed to parse page token: %w", err)
 	}
 
 	teams, nextPage, annos, err := t.client.ListTeams(ctx, &grafana.PaginationVars{
@@ -60,12 +63,12 @@ func (t *teamBuilder) List(ctx context.Context, _ *v2.ResourceId, pToken *pagina
 		Page: page,
 	})
 	if err != nil {
-		return nil, "", annos, fmt.Errorf("grafana-connector: failed to list teams: %w", err)
+		return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: failed to list teams: %w", err)
 	}
 
 	next, err := bag.NextToken(nextPage)
 	if err != nil {
-		return nil, "", annos, fmt.Errorf("grafana-connector: failed to generate next page token: %w", err)
+		return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: failed to generate next page token: %w", err)
 	}
 
 	resources := make([]*v2.Resource, 0, len(teams))
@@ -75,23 +78,23 @@ func (t *teamBuilder) List(ctx context.Context, _ *v2.ResourceId, pToken *pagina
 		}
 		resource, err := teamResource(team)
 		if err != nil {
-			return nil, "", annos, fmt.Errorf("grafana-connector: failed to create team resource %q: %w", team.Name, err)
+			return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: failed to create team resource %q: %w", team.Name, err)
 		}
 		resources = append(resources, resource)
 	}
 
-	return resources, next, annos, nil
+	return resources, &rs.SyncOpResults{NextPageToken: next, Annotations: annos}, nil
 }
 
 // Entitlements is a no-op — every team shares the same membership entitlement
 // via StaticEntitlements.
-func (t *teamBuilder) Entitlements(_ context.Context, _ *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
-	return nil, "", nil, nil
+func (t *teamBuilder) Entitlements(_ context.Context, _ *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Entitlement, *rs.SyncOpResults, error) {
+	return nil, nil, nil
 }
 
 // StaticEntitlements declares the uniform team membership entitlement.
 // GET /api/teams/{id}/members is the same shape for every team.
-func (t *teamBuilder) StaticEntitlements(_ context.Context, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
+func (t *teamBuilder) StaticEntitlements(_ context.Context, _ rs.SyncOpAttrs) ([]*v2.Entitlement, *rs.SyncOpResults, error) {
 	return []*v2.Entitlement{
 		ent.NewAssignmentEntitlement(
 			nil,
@@ -100,37 +103,31 @@ func (t *teamBuilder) StaticEntitlements(_ context.Context, _ *pagination.Token)
 			ent.WithDisplayName("Team Member"),
 			ent.WithDescription("Member of a Grafana team"),
 		),
-	}, "", nil, nil
+	}, nil, nil
 }
 
-// Grants emits team membership on the first page
-// (GET /api/teams/{id}/members), then the team's RBAC roles on a second page
-// (GET /api/access-control/teams/{id}/roles).
-func (t *teamBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
+// Grants emits membership, then team RBAC roles on a second page when roles are in the sync.
+func (t *teamBuilder) Grants(ctx context.Context, resource *v2.Resource, attrs rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
 	teamID, err := strconv.Atoi(resource.Id.Resource)
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("grafana-connector: invalid team id %q: %w", resource.Id.Resource, err)
+		return nil, nil, fmt.Errorf("grafana-connector: invalid team id %q: %w", resource.Id.Resource, err)
 	}
 
-	page := ""
-	if pToken != nil {
-		page = pToken.Token
-	}
-	switch page {
+	switch page := attrs.PageToken.Token; page {
 	case syncRolesToken:
 		roleGrants, annos, err := t.roleGrants(ctx, resource, teamID)
 		if err != nil {
-			return nil, "", annos, err
+			return nil, &rs.SyncOpResults{Annotations: annos}, err
 		}
-		return roleGrants, "", annos, nil
+		return roleGrants, &rs.SyncOpResults{Annotations: annos}, nil
 	case "":
 	default:
-		return nil, "", nil, fmt.Errorf("grafana-connector: unexpected team grants page token %q", page)
+		return nil, nil, fmt.Errorf("grafana-connector: unexpected team grants page token %q", page)
 	}
 
 	members, annos, err := t.client.ListTeamMembers(ctx, teamID)
 	if err != nil {
-		return nil, "", annos, fmt.Errorf("grafana-connector: failed to list members for team %d: %w", teamID, err)
+		return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: failed to list members for team %d: %w", teamID, err)
 	}
 
 	grants := make([]*v2.Grant, 0, len(members))
@@ -140,12 +137,20 @@ func (t *teamBuilder) Grants(ctx context.Context, resource *v2.Resource, pToken 
 		}
 		principalID, err := rs.NewResourceID(resourceTypeUser, member.UserID)
 		if err != nil {
-			return nil, "", annos, fmt.Errorf("grafana-connector: failed to build user resource id for team member %d: %w", member.UserID, err)
+			return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: failed to build user resource id for team member %d: %w", member.UserID, err)
 		}
 		grants = append(grants, grant.NewGrant(resource, teamMemberEntitlement, principalID))
 	}
 
-	return grants, syncRolesToken, annos, nil
+	if !t.syncRoles {
+		ctxzap.Extract(ctx).Debug(
+			"grafana-connector: role type is not part of this sync; skipping team role grants",
+			zap.Int("team_id", teamID),
+		)
+		return grants, &rs.SyncOpResults{Annotations: annos}, nil
+	}
+
+	return grants, &rs.SyncOpResults{NextPageToken: syncRolesToken, Annotations: annos}, nil
 }
 
 // roleGrants lists the RBAC roles assigned to this team. A 404 means the

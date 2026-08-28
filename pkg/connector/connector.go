@@ -8,25 +8,39 @@ import (
 	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/cli"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 )
 
+var _ connectorbuilder.ConnectorBuilderV2 = (*Grafana)(nil)
+
 // Grafana represents the Baton connector for Grafana.
 type Grafana struct {
-	client *grafana.Client
+	client        *grafana.Client
+	connectorOpts *cli.ConnectorOpts
 }
 
 // ResourceSyncers returns a list of syncers for different resource types.
-func (g *Grafana) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncer {
-	return []connectorbuilder.ResourceSyncer{
+func (g *Grafana) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncerV2 {
+	return []connectorbuilder.ResourceSyncerV2{
 		newOrgBuilder(g.client),
 		newUserBuilder(g.client),
-		newTeamBuilder(g.client),
+		newTeamBuilder(g.client, g.willSyncResourceType(resourceTypeRole.GetId())),
 		newRoleBuilder(g.client),
-		newServiceAccountBuilder(g.client),
+		newServiceAccountBuilder(g.client, g.willSyncResourceType(resourceTypeOrg.GetId())),
 	}
+}
+
+// willSyncResourceType is true when the type is in this sync. Nil opts (the
+// capabilities prototype) means no filter, so every advertised type is in scope.
+func (g *Grafana) willSyncResourceType(resourceTypeID string) bool {
+	if g.connectorOpts == nil {
+		return true
+	}
+
+	return g.connectorOpts.WillSyncResourceType(resourceTypeID)
 }
 
 // Asset is used to fetch an asset based on an AssetRef.
@@ -114,7 +128,7 @@ func (g *Grafana) Validate(ctx context.Context) (annotations.Annotations, error)
 // New initializes a new instance of the Grafana connector.
 // When apiToken is non-empty the connector operates in Cloud mode (Bearer auth, current-org scope).
 // When apiToken is empty the connector operates in self-hosted mode (Basic auth, server-admin scope).
-func New(ctx context.Context, hostname, username, password, apiToken string) (*Grafana, error) {
+func New(ctx context.Context, hostname, username, password, apiToken string, connectorOpts *cli.ConnectorOpts) (*Grafana, error) {
 	grafanaClient, err := grafana.NewClient(ctx, hostname, username, password, apiToken)
 	if err != nil {
 		l := ctxzap.Extract(ctx)
@@ -123,6 +137,7 @@ func New(ctx context.Context, hostname, username, password, apiToken string) (*G
 	}
 
 	return &Grafana{
-		client: grafanaClient,
+		client:        grafanaClient,
+		connectorOpts: connectorOpts,
 	}, nil
 }

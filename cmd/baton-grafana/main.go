@@ -2,14 +2,13 @@ package main
 
 import (
 	"context"
-	"fmt"
-	"os"
 
 	cfg "github.com/conductorone/baton-grafana/pkg/config"
 	"github.com/conductorone/baton-grafana/pkg/connector"
-	configschema "github.com/conductorone/baton-sdk/pkg/config"
+	"github.com/conductorone/baton-sdk/pkg/cli"
+	"github.com/conductorone/baton-sdk/pkg/config"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
-	"github.com/conductorone/baton-sdk/pkg/types"
+	"github.com/conductorone/baton-sdk/pkg/connectorrunner"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 )
@@ -19,35 +18,26 @@ var version = "dev"
 func main() {
 	ctx := context.Background()
 
-	_, cmd, err := configschema.DefineConfiguration(ctx, "baton-grafana", getConnector, cfg.Config)
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err.Error())
-		os.Exit(1)
-	}
-
-	cmd.Version = version
-
-	err = cmd.Execute()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err.Error())
-		os.Exit(1)
-	}
+	config.RunConnector(
+		ctx,
+		"baton-grafana",
+		version,
+		cfg.Config,
+		getConnector,
+		connectorrunner.WithDefaultCapabilitiesConnectorBuilderV2(&connector.Grafana{}),
+	)
 }
 
-func getConnector(ctx context.Context, gc *cfg.Grafana) (types.ConnectorServer, error) {
+func getConnector(ctx context.Context, gc *cfg.Grafana, connectorOpts *cli.ConnectorOpts) (
+	connectorbuilder.ConnectorBuilderV2, []connectorbuilder.Opt, error,
+) {
 	l := ctxzap.Extract(ctx)
 
-	cb, err := connector.New(ctx, gc.Hostname, gc.Username, gc.Password, gc.APIToken)
+	cb, err := connector.New(ctx, gc.Hostname, gc.Username, gc.Password, gc.APIToken, connectorOpts)
 	if err != nil {
 		l.Error("error creating connector", zap.Error(err))
-		return nil, err
+		return nil, nil, err
 	}
 
-	c, err := connectorbuilder.NewConnector(ctx, cb)
-	if err != nil {
-		l.Error("error creating connector", zap.Error(err))
-		return nil, err
-	}
-
-	return c, nil
+	return cb, nil, nil
 }

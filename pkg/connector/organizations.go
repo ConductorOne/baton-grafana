@@ -10,6 +10,7 @@ import (
 	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/pagination"
 	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
@@ -17,6 +18,8 @@ import (
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
 )
+
+var _ connectorbuilder.ResourceSyncerV2 = (*orgBuilder)(nil)
 
 type orgBuilder struct {
 	resourceType *v2.ResourceType
@@ -43,36 +46,36 @@ func orgResource(org grafana.Organization) (*v2.Resource, error) {
 }
 
 // List returns all the organizations.
-func (o *orgBuilder) List(ctx context.Context, _ *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
+func (o *orgBuilder) List(ctx context.Context, _ *v2.ResourceId, attrs rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
 	if o.client.IsCloud() {
 		return o.listCloud(ctx)
 	}
-	return o.listSelfHosted(ctx, pToken)
+	return o.listSelfHosted(ctx, &attrs.PageToken)
 }
 
 // listCloud fetches only the current org (Cloud mode — single org scope).
 // ID stability: org.ID from GET /api/org is the same numeric Grafana org ID as from GET /api/orgs.
-func (o *orgBuilder) listCloud(ctx context.Context) ([]*v2.Resource, string, annotations.Annotations, error) {
+func (o *orgBuilder) listCloud(ctx context.Context) ([]*v2.Resource, *rs.SyncOpResults, error) {
 	org, err := o.client.GetCurrentOrg(ctx)
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("grafana-connector: cloud: failed to get current org: %w", err)
+		return nil, nil, fmt.Errorf("grafana-connector: cloud: failed to get current org: %w", err)
 	}
 
 	resource, err := orgResource(*org)
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("grafana-connector: cloud: failed to create org resource: %w", err)
+		return nil, nil, fmt.Errorf("grafana-connector: cloud: failed to create org resource: %w", err)
 	}
 
-	return []*v2.Resource{resource}, "", nil, nil
+	return []*v2.Resource{resource}, nil, nil
 }
 
-// listSelfHosted is the original List logic for self-hosted Grafana — unchanged.
-func (o *orgBuilder) listSelfHosted(ctx context.Context, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
+// listSelfHosted pages GET /api/orgs, which lists every org on the instance.
+func (o *orgBuilder) listSelfHosted(ctx context.Context, pToken *pagination.Token) ([]*v2.Resource, *rs.SyncOpResults, error) {
 	// Parse pagination token. If Token is an empty string, the function returns 0.
 	// /api/orgs is 0-based, so page 0 is the first page (no normalization needed).
 	bag, page, err := parsePageToken(pToken, &v2.ResourceId{ResourceType: resourceTypeOrg.Id})
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("failed to parse page token: %w", err)
+		return nil, nil, fmt.Errorf("grafana-connector: failed to parse page token: %w", err)
 	}
 
 	paginationOpts := grafana.PaginationVars{
@@ -83,12 +86,12 @@ func (o *orgBuilder) listSelfHosted(ctx context.Context, pToken *pagination.Toke
 	// Fetch organizations from Grafana
 	orgs, nextPage, annos, err := o.client.ListOrganizations(ctx, &paginationOpts)
 	if err != nil {
-		return nil, "", annos, fmt.Errorf("grafana-connector: failed to list organizations: %w", err)
+		return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: failed to list organizations: %w", err)
 	}
 
 	next, err := bag.NextToken(nextPage)
 	if err != nil {
-		return nil, "", annos, fmt.Errorf("failed to generate next page token: %w", err)
+		return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: failed to generate next page token: %w", err)
 	}
 
 	// Iterate over organizations and filter valid ones
@@ -100,17 +103,17 @@ func (o *orgBuilder) listSelfHosted(ctx context.Context, pToken *pagination.Toke
 		// Convert organization to a v2.Resource
 		resource, err := orgResource(*org)
 		if err != nil {
-			return nil, "", annos, fmt.Errorf("failed to create resource for org %s: %w", org.Name, err)
+			return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: failed to create resource for org %s: %w", org.Name, err)
 		}
 
 		resources = append(resources, resource)
 	}
 
-	return resources, next, annos, nil
+	return resources, &rs.SyncOpResults{NextPageToken: next, Annotations: annos}, nil
 }
 
 // Entitlements returns a slice of entitlements for possible user roles under organization (Viewer, Editor, Admin).
-func (o *orgBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
+func (o *orgBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Entitlement, *rs.SyncOpResults, error) {
 	// Preallocate slice for efficiency
 	entitlements := make([]*v2.Entitlement, 0, len(userRoles))
 
@@ -130,11 +133,11 @@ func (o *orgBuilder) Entitlements(_ context.Context, resource *v2.Resource, _ *p
 		entitlements = append(entitlements, ent.NewPermissionEntitlement(resource, role, entitlementOptions...))
 	}
 
-	return entitlements, "", nil, nil
+	return entitlements, nil, nil
 }
 
 // Grants returns a slice of grants for each user and their set role under organization.
-func (o *orgBuilder) Grants(ctx context.Context, parentResource *v2.Resource, _ *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
+func (o *orgBuilder) Grants(ctx context.Context, parentResource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
 	var usersByOrgResponse []*grafana.UserByOrgResponse
 	var annos annotations.Annotations
 	var err error
@@ -145,13 +148,13 @@ func (o *orgBuilder) Grants(ctx context.Context, parentResource *v2.Resource, _ 
 		// as User.ID from the self-hosted path. Grant IDs are therefore unchanged.
 		usersByOrgResponse, annos, err = o.client.ListCurrentOrgUsers(ctx)
 		if err != nil {
-			return nil, "", annos, fmt.Errorf("grafana-connector: cloud: failed to list current org users: %w", err)
+			return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: cloud: failed to list current org users: %w", err)
 		}
 	} else {
 		// Self-hosted mode: original behavior unchanged
 		usersByOrgResponse, annos, err = o.client.ListUsersByOrg(ctx, parentResource.Id.Resource)
 		if err != nil {
-			return nil, "", annos, fmt.Errorf("grafana-connector: failed to list users under organization %s: %w", parentResource.Id.Resource, err)
+			return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: failed to list users under organization %s: %w", parentResource.Id.Resource, err)
 		}
 	}
 
@@ -172,14 +175,14 @@ func (o *orgBuilder) Grants(ctx context.Context, parentResource *v2.Resource, _ 
 		user := userByOrg.ToUser()
 		ur, err := userResource(&user)
 		if err != nil {
-			return nil, "", annos, fmt.Errorf("failed to generate user resource for %s: %w", user.Email, err)
+			return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: failed to generate user resource for %s: %w", user.Email, err)
 		}
 
 		// Append grant to the slice
 		grants = append(grants, grant.NewGrant(parentResource, userByOrg.Role, ur.Id))
 	}
 
-	return grants, "", annos, nil
+	return grants, &rs.SyncOpResults{Annotations: annos}, nil
 }
 
 // Grant adds a user to an organization with the specified role.

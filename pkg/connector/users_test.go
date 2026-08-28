@@ -12,7 +12,6 @@ import (
 
 	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
-	"github.com/conductorone/baton-sdk/pkg/pagination"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -36,11 +35,11 @@ func TestListCloud_CreatesUserResources(t *testing.T) {
 	defer ts.Close()
 
 	builder := newUserBuilder(newCloudClientForTest(t, ts))
-	resources, nextToken, _, err := builder.List(context.Background(), nil, &pagination.Token{})
+	resources, results, err := builder.List(context.Background(), nil, syncAttrs(""))
 	if err != nil {
 		t.Fatalf("List returned unexpected error: %v", err)
 	}
-	if nextToken != "" {
+	if nextToken := nextPageToken(results); nextToken != "" {
 		t.Errorf("expected empty next token (no pagination in Cloud mode), got %q", nextToken)
 	}
 	if len(resources) != 1 {
@@ -68,7 +67,7 @@ func TestListCloud_DisabledUserHasDisabledStatus(t *testing.T) {
 	defer ts.Close()
 
 	builder := newUserBuilder(newCloudClientForTest(t, ts))
-	resources, _, _, err := builder.List(context.Background(), nil, &pagination.Token{})
+	resources, _, err := builder.List(context.Background(), nil, syncAttrs(""))
 	if err != nil {
 		t.Fatalf("List returned unexpected error: %v", err)
 	}
@@ -171,7 +170,7 @@ func TestListCloud_ExternalSyncMirrorsNativeFlag(t *testing.T) {
 	defer ts.Close()
 
 	builder := newUserBuilder(newCloudClientForTest(t, ts))
-	resources, _, _, err := builder.List(context.Background(), nil, &pagination.Token{})
+	resources, _, err := builder.List(context.Background(), nil, syncAttrs(""))
 	if err != nil {
 		t.Fatalf("List returned unexpected error: %v", err)
 	}
@@ -213,7 +212,7 @@ func TestListSelfHosted_OmitsExternalSyncFromRawJSON(t *testing.T) {
 	defer ts.Close()
 
 	builder := newUserBuilder(newSelfHostedClientForTest(t, ts))
-	resources, _, _, err := builder.List(context.Background(), nil, &pagination.Token{})
+	resources, _, err := builder.List(context.Background(), nil, syncAttrs(""))
 	if err != nil {
 		t.Fatalf("List returned unexpected error: %v", err)
 	}
@@ -275,14 +274,14 @@ func TestListSelfHosted_PaginationNoDoubleFetch(t *testing.T) {
 
 	// Feed each returned token back into List until it is empty.
 	seen := map[string]bool{}
-	token := &pagination.Token{}
+	pageToken := ""
 	pages := 0
 	for {
 		pages++
 		if pages > 10 {
 			t.Fatal("pagination did not terminate within 10 pages")
 		}
-		resources, next, _, err := builder.List(context.Background(), nil, token)
+		resources, results, err := builder.List(context.Background(), nil, syncAttrs(pageToken))
 		if err != nil {
 			t.Fatalf("List returned unexpected error: %v", err)
 		}
@@ -292,10 +291,10 @@ func TestListSelfHosted_PaginationNoDoubleFetch(t *testing.T) {
 			}
 			seen[r.Id.Resource] = true
 		}
-		if next == "" {
+		pageToken = nextPageToken(results)
+		if pageToken == "" {
 			break
 		}
-		token = &pagination.Token{Token: next}
 	}
 
 	if len(seen) != totalUsers {
@@ -324,14 +323,14 @@ func TestListCloud_ReturnsEmptyForEmptyOrg(t *testing.T) {
 	defer ts.Close()
 
 	builder := newUserBuilder(newCloudClientForTest(t, ts))
-	resources, nextToken, _, err := builder.List(context.Background(), nil, &pagination.Token{})
+	resources, results, err := builder.List(context.Background(), nil, syncAttrs(""))
 	if err != nil {
 		t.Fatalf("List returned unexpected error: %v", err)
 	}
 	if len(resources) != 0 {
 		t.Errorf("expected 0 resources, got %d", len(resources))
 	}
-	if nextToken != "" {
+	if nextToken := nextPageToken(results); nextToken != "" {
 		t.Errorf("expected empty next token, got %q", nextToken)
 	}
 }

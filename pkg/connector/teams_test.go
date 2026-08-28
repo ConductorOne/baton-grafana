@@ -11,7 +11,6 @@ import (
 
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
-	"github.com/conductorone/baton-sdk/pkg/pagination"
 	ent "github.com/conductorone/baton-sdk/pkg/types/entitlement"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"google.golang.org/grpc/codes"
@@ -44,13 +43,13 @@ func TestTeamListAndMemberGrants(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	builder := newTeamBuilder(newCloudClientForTest(t, ts))
+	builder := newTeamBuilder(newCloudClientForTest(t, ts), true)
 
-	resources, next, _, err := builder.List(context.Background(), nil, &pagination.Token{})
+	resources, listResults, err := builder.List(context.Background(), nil, syncAttrs(""))
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if next != "" {
+	if next := nextPageToken(listResults); next != "" {
 		t.Fatalf("expected empty next token, got %q", next)
 	}
 	if len(resources) != 1 || resources[0].Id.Resource != "7" {
@@ -60,10 +59,11 @@ func TestTeamListAndMemberGrants(t *testing.T) {
 		t.Fatalf("team org_id must be a string profile value, got ok=%v value=%q", ok, orgID)
 	}
 
-	grants, next, _, err := builder.Grants(context.Background(), resources[0], &pagination.Token{})
+	grants, grantResults, err := builder.Grants(context.Background(), resources[0], syncAttrs(""))
 	if err != nil {
 		t.Fatalf("Grants members: %v", err)
 	}
+	next := nextPageToken(grantResults)
 	if next != syncRolesToken {
 		t.Fatalf("expected next token %q after membership, got %q", syncRolesToken, next)
 	}
@@ -77,11 +77,11 @@ func TestTeamListAndMemberGrants(t *testing.T) {
 		t.Fatalf("unexpected member grant: %+v", grants[0])
 	}
 
-	roleGrants, next, _, err := builder.Grants(context.Background(), resources[0], &pagination.Token{Token: next})
+	roleGrants, roleResults, err := builder.Grants(context.Background(), resources[0], syncAttrs(next))
 	if err != nil {
 		t.Fatalf("Grants roles: %v", err)
 	}
-	if next != "" {
+	if next := nextPageToken(roleResults); next != "" {
 		t.Fatalf("expected empty next token after roles, got %q", next)
 	}
 	if len(roleGrants) != 0 {
@@ -106,21 +106,21 @@ func TestTeamAndServiceAccountPagination(t *testing.T) {
 			name: "teams",
 			path: "/api/teams/search",
 			run: func(t *testing.T, ts *httptest.Server) {
-				builder := newTeamBuilder(newCloudClientForTest(t, ts))
-				token := &pagination.Token{}
+				builder := newTeamBuilder(newCloudClientForTest(t, ts), true)
+				pageToken := ""
 				var ids []string
 				for {
-					resources, next, _, err := builder.List(context.Background(), nil, token)
+					resources, results, err := builder.List(context.Background(), nil, syncAttrs(pageToken))
 					if err != nil {
 						t.Fatalf("List: %v", err)
 					}
 					for _, resource := range resources {
 						ids = append(ids, resource.Id.Resource)
 					}
-					if next == "" {
+					pageToken = nextPageToken(results)
+					if pageToken == "" {
 						break
 					}
-					token = &pagination.Token{Token: next}
 				}
 				if len(ids) != pageSize+1 {
 					t.Fatalf("got %d ids, want %d", len(ids), pageSize+1)
@@ -134,21 +134,21 @@ func TestTeamAndServiceAccountPagination(t *testing.T) {
 			name: "service accounts",
 			path: "/api/serviceaccounts/search",
 			run: func(t *testing.T, ts *httptest.Server) {
-				builder := newServiceAccountBuilder(newCloudClientForTest(t, ts))
-				token := &pagination.Token{}
+				builder := newServiceAccountBuilder(newCloudClientForTest(t, ts), true)
+				pageToken := ""
 				var ids []string
 				for {
-					resources, next, _, err := builder.List(context.Background(), nil, token)
+					resources, results, err := builder.List(context.Background(), nil, syncAttrs(pageToken))
 					if err != nil {
 						t.Fatalf("List: %v", err)
 					}
 					for _, resource := range resources {
 						ids = append(ids, resource.Id.Resource)
 					}
-					if next == "" {
+					pageToken = nextPageToken(results)
+					if pageToken == "" {
 						break
 					}
-					token = &pagination.Token{Token: next}
 				}
 				if len(ids) != pageSize+1 {
 					t.Fatalf("got %d ids, want %d", len(ids), pageSize+1)
@@ -231,7 +231,7 @@ func TestTeamGrantIdempotent(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	annos, err := newTeamBuilder(newCloudClientForTest(t, ts)).Grant(
+	annos, err := newTeamBuilder(newCloudClientForTest(t, ts), true).Grant(
 		context.Background(),
 		&v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeUser.Id, Resource: "14"}},
 		&v2.Entitlement{
@@ -266,7 +266,7 @@ func TestTeamGrantAndRevokeSuccess(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	builder := newTeamBuilder(newCloudClientForTest(t, ts))
+	builder := newTeamBuilder(newCloudClientForTest(t, ts), true)
 	principal := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeUser.Id, Resource: "14"}}
 	entitlement := &v2.Entitlement{
 		Resource: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
@@ -295,7 +295,7 @@ func TestTeamRevokeIdempotent(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	annos, err := newTeamBuilder(newCloudClientForTest(t, ts)).Revoke(context.Background(), &v2.Grant{
+	annos, err := newTeamBuilder(newCloudClientForTest(t, ts), true).Revoke(context.Background(), &v2.Grant{
 		Principal: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeUser.Id, Resource: "14"}},
 		Entitlement: &v2.Entitlement{
 			Resource: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
@@ -319,7 +319,7 @@ func TestTeamRevokeDoesNotHideMissingTeam(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	annos, err := newTeamBuilder(newCloudClientForTest(t, ts)).Revoke(context.Background(), &v2.Grant{
+	annos, err := newTeamBuilder(newCloudClientForTest(t, ts), true).Revoke(context.Background(), &v2.Grant{
 		Principal: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeUser.Id, Resource: "14"}},
 		Entitlement: &v2.Entitlement{
 			Resource: &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}},
@@ -349,7 +349,7 @@ func TestRoleListFiltersIRM(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	resources, _, _, err := newRoleBuilder(newCloudClientForTest(t, ts)).List(context.Background(), nil, &pagination.Token{})
+	resources, _, err := newRoleBuilder(newCloudClientForTest(t, ts)).List(context.Background(), nil, syncAttrs(""))
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -374,7 +374,7 @@ func TestRoleListFiltersIRM(t *testing.T) {
 func TestRoleStaticEntitlements(t *testing.T) {
 	builder := newRoleBuilder(nil)
 
-	dynamic, _, _, err := builder.Entitlements(context.Background(), &v2.Resource{}, &pagination.Token{})
+	dynamic, _, err := builder.Entitlements(context.Background(), &v2.Resource{}, syncAttrs(""))
 	if err != nil {
 		t.Fatalf("Entitlements: %v", err)
 	}
@@ -382,7 +382,7 @@ func TestRoleStaticEntitlements(t *testing.T) {
 		t.Fatalf("expected dynamic Entitlements to be empty, got %d", len(dynamic))
 	}
 
-	static, _, _, err := builder.StaticEntitlements(context.Background(), &pagination.Token{})
+	static, _, err := builder.StaticEntitlements(context.Background(), syncAttrs(""))
 	if err != nil {
 		t.Fatalf("StaticEntitlements: %v", err)
 	}
@@ -412,9 +412,9 @@ func TestRoleStaticEntitlements(t *testing.T) {
 }
 
 func TestTeamStaticEntitlements(t *testing.T) {
-	builder := newTeamBuilder(nil)
+	builder := newTeamBuilder(nil, true)
 
-	dynamic, _, _, err := builder.Entitlements(context.Background(), &v2.Resource{}, &pagination.Token{})
+	dynamic, _, err := builder.Entitlements(context.Background(), &v2.Resource{}, syncAttrs(""))
 	if err != nil {
 		t.Fatalf("Entitlements: %v", err)
 	}
@@ -422,7 +422,7 @@ func TestTeamStaticEntitlements(t *testing.T) {
 		t.Fatalf("expected dynamic Entitlements to be empty, got %d", len(dynamic))
 	}
 
-	static, _, _, err := builder.StaticEntitlements(context.Background(), &pagination.Token{})
+	static, _, err := builder.StaticEntitlements(context.Background(), syncAttrs(""))
 	if err != nil {
 		t.Fatalf("StaticEntitlements: %v", err)
 	}
@@ -464,8 +464,8 @@ func TestServiceAccountListAndOrgGrant(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	builder := newServiceAccountBuilder(newCloudClientForTest(t, ts))
-	resources, _, _, err := builder.List(context.Background(), nil, &pagination.Token{})
+	builder := newServiceAccountBuilder(newCloudClientForTest(t, ts), true)
+	resources, _, err := builder.List(context.Background(), nil, syncAttrs(""))
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
@@ -480,7 +480,7 @@ func TestServiceAccountListAndOrgGrant(t *testing.T) {
 		t.Fatalf("expected disabled service account status, got %v", status)
 	}
 
-	grants, _, _, err := builder.Grants(context.Background(), resources[0], &pagination.Token{})
+	grants, _, err := builder.Grants(context.Background(), resources[0], syncAttrs(""))
 	if err != nil {
 		t.Fatalf("Grants: %v", err)
 	}
@@ -546,7 +546,7 @@ func TestRoleListErrorsWhenRBACUnavailable(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	_, _, _, err := newRoleBuilder(newCloudClientForTest(t, ts)).List(context.Background(), nil, &pagination.Token{})
+	_, _, err := newRoleBuilder(newCloudClientForTest(t, ts)).List(context.Background(), nil, syncAttrs(""))
 	if err == nil {
 		t.Fatal("expected List to error when access-control is unavailable")
 	}
@@ -558,7 +558,7 @@ func TestRoleListErrorsWhenRBACForbidden(t *testing.T) {
 	}))
 	defer ts.Close()
 
-	_, _, _, err := newRoleBuilder(newCloudClientForTest(t, ts)).List(context.Background(), nil, &pagination.Token{})
+	_, _, err := newRoleBuilder(newCloudClientForTest(t, ts)).List(context.Background(), nil, syncAttrs(""))
 	if err == nil {
 		t.Fatal("expected List to error when access-control is forbidden")
 	}
@@ -588,11 +588,12 @@ func TestTeamGrantsEmitTeamRoleGrants(t *testing.T) {
 	defer ts.Close()
 
 	resource := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}}
-	builder := newTeamBuilder(newCloudClientForTest(t, ts))
-	members, next, _, err := builder.Grants(context.Background(), resource, &pagination.Token{})
+	builder := newTeamBuilder(newCloudClientForTest(t, ts), true)
+	members, memberResults, err := builder.Grants(context.Background(), resource, syncAttrs(""))
 	if err != nil {
 		t.Fatalf("Grants members: %v", err)
 	}
+	next := nextPageToken(memberResults)
 	if next != syncRolesToken {
 		t.Fatalf("expected next token %q, got %q", syncRolesToken, next)
 	}
@@ -603,11 +604,11 @@ func TestTeamGrantsEmitTeamRoleGrants(t *testing.T) {
 		t.Fatalf("unexpected member grant: %+v", members)
 	}
 
-	grants, next, _, err := builder.Grants(context.Background(), resource, &pagination.Token{Token: next})
+	grants, roleResults, err := builder.Grants(context.Background(), resource, syncAttrs(next))
 	if err != nil {
 		t.Fatalf("Grants roles: %v", err)
 	}
-	if next != "" {
+	if next := nextPageToken(roleResults); next != "" {
 		t.Fatalf("expected empty next token, got %q", next)
 	}
 	if teamRoleCalls != 1 {
@@ -662,19 +663,19 @@ func TestTeamGrantsSkipWhenRBACUnavailable(t *testing.T) {
 	defer ts.Close()
 
 	resource := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}}
-	builder := newTeamBuilder(newCloudClientForTest(t, ts))
-	members, next, _, err := builder.Grants(context.Background(), resource, &pagination.Token{})
+	builder := newTeamBuilder(newCloudClientForTest(t, ts), true)
+	members, memberResults, err := builder.Grants(context.Background(), resource, syncAttrs(""))
 	if err != nil {
 		t.Fatalf("Grants members: %v", err)
 	}
 	if len(members) != 1 || members[0].Principal.Id.Resource != "14" {
 		t.Fatalf("expected only the member grant for user 14, got %+v", members)
 	}
-	roleGrants, next, _, err := builder.Grants(context.Background(), resource, &pagination.Token{Token: next})
+	roleGrants, roleResults, err := builder.Grants(context.Background(), resource, syncAttrs(nextPageToken(memberResults)))
 	if err != nil {
 		t.Fatalf("Grants roles: %v", err)
 	}
-	if next != "" {
+	if next := nextPageToken(roleResults); next != "" {
 		t.Fatalf("expected empty next token, got %q", next)
 	}
 	if len(roleGrants) != 0 {
@@ -706,15 +707,16 @@ func TestTeamGrantsFailClosedOnRBACError(t *testing.T) {
 			defer ts.Close()
 
 			resource := &v2.Resource{Id: &v2.ResourceId{ResourceType: resourceTypeTeam.Id, Resource: "7"}}
-			builder := newTeamBuilder(newCloudClientForTest(t, ts))
-			members, next, _, err := builder.Grants(context.Background(), resource, &pagination.Token{})
+			builder := newTeamBuilder(newCloudClientForTest(t, ts), true)
+			members, memberResults, err := builder.Grants(context.Background(), resource, syncAttrs(""))
 			if err != nil {
 				t.Fatalf("membership page must succeed when only roles fail: %v", err)
 			}
+			next := nextPageToken(memberResults)
 			if len(members) != 1 || next != syncRolesToken {
 				t.Fatalf("members=%d next=%q", len(members), next)
 			}
-			grants, _, _, err := builder.Grants(context.Background(), resource, &pagination.Token{Token: next})
+			grants, _, err := builder.Grants(context.Background(), resource, syncAttrs(next))
 			if err == nil {
 				t.Fatalf("expected a %d from the team-roles GET to fail the roles page", code)
 			}

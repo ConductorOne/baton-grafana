@@ -65,6 +65,19 @@ func newSelfHostedClientForTest(t *testing.T, ts *httptest.Server) *grafana.Clie
 	return client
 }
 
+// syncAttrs builds the sync-op attributes a V2 builder call takes, carrying the
+// page token the SDK would hand back on the previous call.
+func syncAttrs(pageToken string) rs.SyncOpAttrs {
+	return rs.SyncOpAttrs{PageToken: pagination.Token{Token: pageToken}}
+}
+
+func nextPageToken(results *rs.SyncOpResults) string {
+	if results == nil {
+		return ""
+	}
+	return results.NextPageToken
+}
+
 // writeJSON writes data as JSON with the given HTTP status code.
 func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
@@ -393,10 +406,11 @@ func TestListSelfHosted_Orgs_SingleOrgSyncs(t *testing.T) {
 	defer ts.Close()
 
 	builder := newOrgBuilder(newSelfHostedClientForTest(t, ts))
-	resources, next, _, err := builder.List(context.Background(), nil, &pagination.Token{})
+	resources, results, err := builder.List(context.Background(), nil, syncAttrs(""))
 	if err != nil {
 		t.Fatalf("List returned unexpected error: %v", err)
 	}
+	next := nextPageToken(results)
 	if len(resources) != 1 {
 		t.Fatalf("expected 1 org, got %d (regression: org sync returned nothing)", len(resources))
 	}
@@ -448,12 +462,12 @@ func TestListSelfHosted_Orgs_PaginationZeroBased(t *testing.T) {
 
 	builder := newOrgBuilder(newSelfHostedClientForTest(t, ts))
 	seen := map[string]bool{}
-	token := &pagination.Token{}
+	pageToken := ""
 	for i := 0; ; i++ {
 		if i > 10 {
 			t.Fatal("pagination did not terminate within 10 pages")
 		}
-		resources, next, _, err := builder.List(context.Background(), nil, token)
+		resources, results, err := builder.List(context.Background(), nil, syncAttrs(pageToken))
 		if err != nil {
 			t.Fatalf("List returned unexpected error: %v", err)
 		}
@@ -463,10 +477,10 @@ func TestListSelfHosted_Orgs_PaginationZeroBased(t *testing.T) {
 			}
 			seen[r.Id.Resource] = true
 		}
-		if next == "" {
+		pageToken = nextPageToken(results)
+		if pageToken == "" {
 			break
 		}
-		token = &pagination.Token{Token: next}
 	}
 
 	if len(seen) != totalOrg {
