@@ -37,6 +37,9 @@ func TestServiceAccountGrantsSkippedWhenOrgNotSynced(t *testing.T) {
 	if !typeAnnos.Contains(&v2.SkipEntitlementsAndGrants{}) {
 		t.Fatal("without the org type in scope the service account type must carry SkipEntitlementsAndGrants")
 	}
+	if !typeAnnos.Contains(&v2.SkipEntitlements{}) {
+		t.Fatal("the org-excluded variant must preserve the base service account annotations")
+	}
 	if resourceType.GetId() != resourceTypeServiceAccount.GetId() ||
 		resourceType.GetDisplayName() != resourceTypeServiceAccount.GetDisplayName() ||
 		!slices.Equal(resourceType.GetTraits(), resourceTypeServiceAccount.GetTraits()) {

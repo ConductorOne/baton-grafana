@@ -28,7 +28,9 @@ type serviceAccountBuilder struct {
 func newServiceAccountBuilder(client *grafana.Client, syncOrgs bool) *serviceAccountBuilder {
 	rt := proto.Clone(resourceTypeServiceAccount).(*v2.ResourceType)
 	if !syncOrgs {
-		rt.Annotations = annotations.New(&v2.SkipEntitlementsAndGrants{})
+		annos := annotations.Annotations(rt.GetAnnotations())
+		annos.Update(&v2.SkipEntitlementsAndGrants{})
+		rt.Annotations = annos
 	}
 
 	return &serviceAccountBuilder{client: client, resourceType: rt, syncOrgs: syncOrgs}
