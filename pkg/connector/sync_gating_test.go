@@ -10,10 +10,9 @@ import (
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 	"github.com/conductorone/baton-sdk/pkg/cli"
-	"google.golang.org/protobuf/proto"
 )
 
-func TestServiceAccountGrantsSkippedWhenOrgNotSynced(t *testing.T) {
+func TestServiceAccountResourceTypeWhenOrgNotSynced(t *testing.T) {
 	ts := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/serviceaccounts/search" {
 			writeJSON(w, http.StatusOK, map[string]any{
@@ -37,8 +36,8 @@ func TestServiceAccountGrantsSkippedWhenOrgNotSynced(t *testing.T) {
 	if !typeAnnos.Contains(&v2.SkipEntitlementsAndGrants{}) {
 		t.Fatal("without the org type in scope the service account type must carry SkipEntitlementsAndGrants")
 	}
-	if !typeAnnos.Contains(&v2.SkipEntitlements{}) {
-		t.Fatal("the org-excluded variant must preserve the base service account annotations")
+	if typeAnnos.Contains(&v2.SkipEntitlements{}) {
+		t.Fatal("SkipEntitlementsAndGrants must replace the redundant SkipEntitlements annotation")
 	}
 	if resourceType.GetId() != resourceTypeServiceAccount.GetId() ||
 		resourceType.GetDisplayName() != resourceTypeServiceAccount.GetDisplayName() ||
@@ -46,8 +45,8 @@ func TestServiceAccountGrantsSkippedWhenOrgNotSynced(t *testing.T) {
 		t.Fatalf("the variant must differ from the base type only in its annotations, got %+v", resourceType)
 	}
 	baseAnnos := annotations.Annotations(resourceTypeServiceAccount.GetAnnotations())
-	if baseAnnos.Contains(&v2.SkipEntitlementsAndGrants{}) {
-		t.Fatal("deriving the variant must not mutate the package-level service account type")
+	if baseAnnos.Contains(&v2.SkipEntitlements{}) || baseAnnos.Contains(&v2.SkipEntitlementsAndGrants{}) {
+		t.Fatal("runtime skip annotations must not mutate the package-level service account type")
 	}
 
 	resources, _, err := builder.List(context.Background(), nil, syncAttrs(""))
@@ -57,22 +56,23 @@ func TestServiceAccountGrantsSkippedWhenOrgNotSynced(t *testing.T) {
 	if len(resources) != 1 {
 		t.Fatalf("service accounts must still sync when orgs are out of scope, got %d resources", len(resources))
 	}
-
-	grants, _, err := builder.Grants(context.Background(), resources[0], syncAttrs(""))
-	if err != nil {
-		t.Fatalf("Grants: %v", err)
-	}
-	if len(grants) != 0 {
-		t.Fatalf("expected no org role grants, got %d", len(grants))
-	}
 }
 
 func TestServiceAccountResourceTypeWhenOrgSynced(t *testing.T) {
 	builder := newServiceAccountBuilder(nil, true)
 
 	resourceType := builder.ResourceType(context.Background())
-	if !proto.Equal(resourceType, resourceTypeServiceAccount) {
-		t.Fatalf("expected the default service account type, got %+v", resourceType)
+	typeAnnos := annotations.Annotations(resourceType.GetAnnotations())
+	if !typeAnnos.Contains(&v2.SkipEntitlements{}) {
+		t.Fatal("with the org type in scope the service account type must carry SkipEntitlements")
+	}
+	if typeAnnos.Contains(&v2.SkipEntitlementsAndGrants{}) {
+		t.Fatal("with the org type in scope service account grants must remain enabled")
+	}
+	if resourceType.GetId() != resourceTypeServiceAccount.GetId() ||
+		resourceType.GetDisplayName() != resourceTypeServiceAccount.GetDisplayName() ||
+		!slices.Equal(resourceType.GetTraits(), resourceTypeServiceAccount.GetTraits()) {
+		t.Fatalf("the runtime service account type must differ from the package-level type only in its annotations, got %+v", resourceType)
 	}
 }
 

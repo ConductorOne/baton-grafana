@@ -32,6 +32,5 @@ var (
 		Id:          "service_account",
 		DisplayName: "Service Account",
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_USER},
-		Annotations: annotations.New(&v2.SkipEntitlements{}),
 	}
 )

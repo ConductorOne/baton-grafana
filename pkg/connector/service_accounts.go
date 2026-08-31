@@ -22,18 +22,26 @@ var _ connectorbuilder.ResourceSyncerV2 = (*serviceAccountBuilder)(nil)
 type serviceAccountBuilder struct {
 	client       *grafana.Client
 	resourceType *v2.ResourceType
-	syncOrgs     bool // false skips SA→org grants; the type is cloned so the package-level var stays unchanged
+}
+
+func serviceAccountResourceType(syncOrgs bool) *v2.ResourceType {
+	rt := proto.Clone(resourceTypeServiceAccount).(*v2.ResourceType)
+	annos := annotations.Annotations(rt.GetAnnotations())
+	if syncOrgs {
+		annos.Update(&v2.SkipEntitlements{})
+	} else {
+		annos.Update(&v2.SkipEntitlementsAndGrants{})
+	}
+	rt.Annotations = annos
+
+	return rt
 }
 
 func newServiceAccountBuilder(client *grafana.Client, syncOrgs bool) *serviceAccountBuilder {
-	rt := proto.Clone(resourceTypeServiceAccount).(*v2.ResourceType)
-	if !syncOrgs {
-		annos := annotations.Annotations(rt.GetAnnotations())
-		annos.Update(&v2.SkipEntitlementsAndGrants{})
-		rt.Annotations = annos
+	return &serviceAccountBuilder{
+		client:       client,
+		resourceType: serviceAccountResourceType(syncOrgs),
 	}
-
-	return &serviceAccountBuilder{client: client, resourceType: rt, syncOrgs: syncOrgs}
 }
 
 func (s *serviceAccountBuilder) ResourceType(_ context.Context) *v2.ResourceType {
@@ -119,16 +127,8 @@ func (s *serviceAccountBuilder) Entitlements(_ context.Context, _ *v2.Resource, 
 }
 
 // Grants emits the SA's org role from the search `role` field. Org-side Grants
-// miss SAs (they are absent from GET /api/org/users); skip when org is not synced.
+// miss SAs because they are absent from GET /api/org/users.
 func (s *serviceAccountBuilder) Grants(ctx context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
-	if !s.syncOrgs {
-		ctxzap.Extract(ctx).Debug(
-			"grafana-connector: org type is not part of this sync; skipping service account org role grant",
-			zap.String("resource_id", resource.GetId().GetResource()),
-		)
-		return nil, nil, nil
-	}
-
 	rawProfile := resource.GetProfile()
 	if rawProfile == nil {
 		ctxzap.Extract(ctx).Debug(

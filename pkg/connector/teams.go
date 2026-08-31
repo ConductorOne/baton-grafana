@@ -116,8 +116,8 @@ func (t *teamBuilder) Grants(ctx context.Context, resource *v2.Resource, attrs r
 		return nil, nil, fmt.Errorf("grafana-connector: invalid team id %q: %w", resource.Id.Resource, err)
 	}
 
-	switch page := attrs.PageToken.Token; page {
-	case syncRolesToken:
+	page := attrs.PageToken.Token
+	if page == syncRolesToken {
 		if !t.syncRoles {
 			return nil, nil, nil
 		}
@@ -126,8 +126,8 @@ func (t *teamBuilder) Grants(ctx context.Context, resource *v2.Resource, attrs r
 			return nil, &rs.SyncOpResults{Annotations: annos}, err
 		}
 		return roleGrants, &rs.SyncOpResults{Annotations: annos}, nil
-	case "":
-	default:
+	}
+	if page != "" {
 		return nil, nil, fmt.Errorf("grafana-connector: unexpected team grants page token %q", page)
 	}
 
