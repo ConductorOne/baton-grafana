@@ -25,7 +25,7 @@ type userBuilder struct {
 	client       *grafana.Client
 }
 
-var _ connectorbuilder.AccountManager = &userBuilder{}
+var _ connectorbuilder.AccountManagerV2 = &userBuilder{}
 
 // ResourceType returns the Baton resource type for users.
 func (u *userBuilder) ResourceType(_ context.Context) *v2.ResourceType {
@@ -84,19 +84,19 @@ func userResource(user *grafana.User) (*v2.Resource, error) {
 
 // List fetches all users in Grafana. Cloud mode uses the organization bound to
 // the service account; self-hosted users are global, so neither path needs a parent.
-func (u *userBuilder) List(ctx context.Context, _ *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
+func (u *userBuilder) List(ctx context.Context, _ *v2.ResourceId, attrs rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
 	if u.client.IsCloud() {
 		return u.listCloud(ctx)
 	}
-	return u.listSelfHosted(ctx, pToken)
+	return u.listSelfHosted(ctx, &attrs.PageToken)
 }
 
 // listCloud fetches all members of the current org via GET /api/org/users (no pagination).
 // ID stability: UserByOrgResponse.ID (json:"userId") == User.ID — same numeric Grafana user ID.
-func (u *userBuilder) listCloud(ctx context.Context) ([]*v2.Resource, string, annotations.Annotations, error) {
+func (u *userBuilder) listCloud(ctx context.Context) ([]*v2.Resource, *rs.SyncOpResults, error) {
 	orgUsers, annos, err := u.client.ListCurrentOrgUsers(ctx)
 	if err != nil {
-		return nil, "", annos, fmt.Errorf("grafana-connector: cloud: failed to list current org users: %w", err)
+		return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: cloud: failed to list current org users: %w", err)
 	}
 
 	resources := make([]*v2.Resource, 0, len(orgUsers))
@@ -107,21 +107,21 @@ func (u *userBuilder) listCloud(ctx context.Context) ([]*v2.Resource, string, an
 		user := orgUser.ToUser() // ID preserved: UserByOrgResponse.ID (userId) → User.ID
 		ur, err := userResource(&user)
 		if err != nil {
-			return nil, "", annos, fmt.Errorf("grafana-connector: cloud: failed to create user resource: %w", err)
+			return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: cloud: failed to create user resource: %w", err)
 		}
 		resources = append(resources, ur)
 	}
 
 	// No pagination — endpoint returns all members in a single response
-	return resources, "", annos, nil
+	return resources, &rs.SyncOpResults{Annotations: annos}, nil
 }
 
-// listSelfHosted is the original List logic for self-hosted Grafana — unchanged.
-func (u *userBuilder) listSelfHosted(ctx context.Context, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
+// listSelfHosted pages GET /api/users, the global user list on a self-hosted instance.
+func (u *userBuilder) listSelfHosted(ctx context.Context, pToken *pagination.Token) ([]*v2.Resource, *rs.SyncOpResults, error) {
 	// Parse pagination token. If Token is an empty string, the function returns 0.
 	bag, page, err := parsePageToken(pToken, &v2.ResourceId{ResourceType: resourceTypeUser.Id})
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("failed to parse page token: %w", err)
+		return nil, nil, fmt.Errorf("grafana-connector: failed to parse page token: %w", err)
 	}
 
 	paginationOpts := grafana.PaginationVars{
@@ -132,12 +132,12 @@ func (u *userBuilder) listSelfHosted(ctx context.Context, pToken *pagination.Tok
 	// Fetch users from Grafana. The client normalizes 1-based paging.
 	users, nextPage, annos, err := u.client.ListUsers(ctx, &paginationOpts)
 	if err != nil {
-		return nil, "", annos, fmt.Errorf("grafana-connector: failed to list users: %w", err)
+		return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: failed to list users: %w", err)
 	}
 
 	next, err := bag.NextToken(nextPage)
 	if err != nil {
-		return nil, "", annos, fmt.Errorf("failed to generate next token: %w", err)
+		return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: failed to generate next token: %w", err)
 	}
 
 	resources := make([]*v2.Resource, 0, len(users))
@@ -150,22 +150,22 @@ func (u *userBuilder) listSelfHosted(ctx context.Context, pToken *pagination.Tok
 		// Self-hosted global /api/users omits the native flag — is_externally_synced is omitted.
 		ur, err := userResource(user)
 		if err != nil {
-			return nil, "", annos, fmt.Errorf("failed to create resource for user %s: %w", user.Email, err)
+			return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: failed to create resource for user %s: %w", user.Email, err)
 		}
 		resources = append(resources, ur)
 	}
 
-	return resources, next, annos, nil
+	return resources, &rs.SyncOpResults{NextPageToken: next, Annotations: annos}, nil
 }
 
 // Entitlements returns an empty list for users.
-func (u *userBuilder) Entitlements(_ context.Context, _ *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
-	return nil, "", nil, nil
+func (u *userBuilder) Entitlements(_ context.Context, _ *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Entitlement, *rs.SyncOpResults, error) {
+	return nil, nil, nil
 }
 
 // Grants returns an empty list for users.
-func (u *userBuilder) Grants(_ context.Context, _ *v2.Resource, _ *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
-	return nil, "", nil, nil
+func (u *userBuilder) Grants(_ context.Context, _ *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
+	return nil, nil, nil
 }
 
 // newUserBuilder initializes a user resource type.
@@ -176,9 +176,10 @@ func newUserBuilder(client *grafana.Client) *userBuilder {
 	}
 }
 
-// CreateAccountCapabilityDetails indicates the credential options this connector supports.
+// CreateAccountCapabilityDetails reports Cloud invite vs self-hosted password options.
+// A nil client (capabilities prototype) falls through to the self-hosted set.
 func (u *userBuilder) CreateAccountCapabilityDetails(_ context.Context) (*v2.CredentialDetailsAccountProvisioning, annotations.Annotations, error) {
-	if u.client.IsCloud() {
+	if u.client != nil && u.client.IsCloud() {
 		// Cloud mode: user creation is via org invite — no connector-generated password
 		return &v2.CredentialDetailsAccountProvisioning{
 			SupportedCredentialOptions: []v2.CapabilityDetailCredentialOption{

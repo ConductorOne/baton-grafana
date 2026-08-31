@@ -9,23 +9,43 @@ import (
 	"github.com/conductorone/baton-grafana/pkg/grafana"
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
-	"github.com/conductorone/baton-sdk/pkg/pagination"
+	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 	"github.com/conductorone/baton-sdk/pkg/types/grant"
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 	"github.com/grpc-ecosystem/go-grpc-middleware/logging/zap/ctxzap"
 	"go.uber.org/zap"
+	"google.golang.org/protobuf/proto"
 )
 
+var _ connectorbuilder.ResourceSyncerV2 = (*serviceAccountBuilder)(nil)
+
 type serviceAccountBuilder struct {
-	client *grafana.Client
+	client       *grafana.Client
+	resourceType *v2.ResourceType
 }
 
-func newServiceAccountBuilder(client *grafana.Client) *serviceAccountBuilder {
-	return &serviceAccountBuilder{client: client}
+func serviceAccountResourceType(syncOrgs bool) *v2.ResourceType {
+	rt := proto.Clone(resourceTypeServiceAccount).(*v2.ResourceType)
+	annos := annotations.Annotations(rt.GetAnnotations())
+	if syncOrgs {
+		annos.Update(&v2.SkipEntitlements{})
+	} else {
+		annos.Update(&v2.SkipEntitlementsAndGrants{})
+	}
+	rt.Annotations = annos
+
+	return rt
+}
+
+func newServiceAccountBuilder(client *grafana.Client, syncOrgs bool) *serviceAccountBuilder {
+	return &serviceAccountBuilder{
+		client:       client,
+		resourceType: serviceAccountResourceType(syncOrgs),
+	}
 }
 
 func (s *serviceAccountBuilder) ResourceType(_ context.Context) *v2.ResourceType {
-	return resourceTypeServiceAccount
+	return s.resourceType
 }
 
 func serviceAccountResource(sa *grafana.ServiceAccount) (*v2.Resource, error) {
@@ -68,10 +88,10 @@ func serviceAccountResource(sa *grafana.ServiceAccount) (*v2.Resource, error) {
 	)
 }
 
-func (s *serviceAccountBuilder) List(ctx context.Context, _ *v2.ResourceId, pToken *pagination.Token) ([]*v2.Resource, string, annotations.Annotations, error) {
-	bag, page, err := parsePageToken(pToken, &v2.ResourceId{ResourceType: resourceTypeServiceAccount.Id})
+func (s *serviceAccountBuilder) List(ctx context.Context, _ *v2.ResourceId, attrs rs.SyncOpAttrs) ([]*v2.Resource, *rs.SyncOpResults, error) {
+	bag, page, err := parsePageToken(&attrs.PageToken, &v2.ResourceId{ResourceType: resourceTypeServiceAccount.Id})
 	if err != nil {
-		return nil, "", nil, fmt.Errorf("grafana-connector: failed to parse page token: %w", err)
+		return nil, nil, fmt.Errorf("grafana-connector: failed to parse page token: %w", err)
 	}
 
 	serviceAccounts, nextPage, annos, err := s.client.ListServiceAccounts(ctx, &grafana.PaginationVars{
@@ -79,12 +99,12 @@ func (s *serviceAccountBuilder) List(ctx context.Context, _ *v2.ResourceId, pTok
 		Page: page,
 	})
 	if err != nil {
-		return nil, "", annos, fmt.Errorf("grafana-connector: failed to list service accounts: %w", err)
+		return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: failed to list service accounts: %w", err)
 	}
 
 	next, err := bag.NextToken(nextPage)
 	if err != nil {
-		return nil, "", annos, fmt.Errorf("grafana-connector: failed to generate next page token: %w", err)
+		return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: failed to generate next page token: %w", err)
 	}
 
 	resources := make([]*v2.Resource, 0, len(serviceAccounts))
@@ -94,29 +114,28 @@ func (s *serviceAccountBuilder) List(ctx context.Context, _ *v2.ResourceId, pTok
 		}
 		resource, err := serviceAccountResource(serviceAccount)
 		if err != nil {
-			return nil, "", annos, fmt.Errorf("grafana-connector: failed to create service account resource %q: %w", serviceAccount.Name, err)
+			return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: failed to create service account resource %q: %w", serviceAccount.Name, err)
 		}
 		resources = append(resources, resource)
 	}
 
-	return resources, next, annos, nil
+	return resources, &rs.SyncOpResults{NextPageToken: next, Annotations: annos}, nil
 }
 
-func (s *serviceAccountBuilder) Entitlements(_ context.Context, _ *v2.Resource, _ *pagination.Token) ([]*v2.Entitlement, string, annotations.Annotations, error) {
-	return nil, "", nil, nil
+func (s *serviceAccountBuilder) Entitlements(_ context.Context, _ *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Entitlement, *rs.SyncOpResults, error) {
+	return nil, nil, nil
 }
 
-// Grants emits the service account's org role from the search response `role`
-// field (Viewer/Editor/Admin). GET /api/org/users does not include service
-// accounts, so org-side Grants alone miss that access.
-func (s *serviceAccountBuilder) Grants(ctx context.Context, resource *v2.Resource, _ *pagination.Token) ([]*v2.Grant, string, annotations.Annotations, error) {
+// Grants emits the SA's org role from the search `role` field. Org-side Grants
+// miss SAs because they are absent from GET /api/org/users.
+func (s *serviceAccountBuilder) Grants(ctx context.Context, resource *v2.Resource, _ rs.SyncOpAttrs) ([]*v2.Grant, *rs.SyncOpResults, error) {
 	rawProfile := resource.GetProfile()
 	if rawProfile == nil {
 		ctxzap.Extract(ctx).Debug(
 			"grafana-connector: service account missing profile; skipping org role grant",
 			zap.String("resource_id", resource.GetId().GetResource()),
 		)
-		return nil, "", nil, nil
+		return nil, nil, nil
 	}
 
 	role, ok := rs.GetProfileStringValue(rawProfile, profileKeyRole)
@@ -126,7 +145,7 @@ func (s *serviceAccountBuilder) Grants(ctx context.Context, resource *v2.Resourc
 			zap.String("resource_id", resource.GetId().GetResource()),
 			zap.String("role", role),
 		)
-		return nil, "", nil, nil
+		return nil, nil, nil
 	}
 
 	orgID, ok := rs.GetProfileStringValue(rawProfile, profileKeyOrgID)
@@ -135,7 +154,7 @@ func (s *serviceAccountBuilder) Grants(ctx context.Context, resource *v2.Resourc
 			"grafana-connector: service account missing org_id; skipping org role grant",
 			zap.String("resource_id", resource.GetId().GetResource()),
 		)
-		return nil, "", nil, nil
+		return nil, nil, nil
 	}
 
 	orgRes := &v2.Resource{
@@ -152,5 +171,5 @@ func (s *serviceAccountBuilder) Grants(ctx context.Context, resource *v2.Resourc
 		role,
 		resource.Id,
 		grant.WithAnnotation(&v2.GrantImmutable{}),
-	)}, "", nil, nil
+	)}, nil, nil
 }
