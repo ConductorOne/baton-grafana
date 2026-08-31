@@ -19,7 +19,10 @@ import (
 	"google.golang.org/grpc/status"
 )
 
-var _ connectorbuilder.ResourceSyncerV2 = (*teamBuilder)(nil)
+var (
+	_ connectorbuilder.ResourceSyncerV2          = (*teamBuilder)(nil)
+	_ connectorbuilder.StaticEntitlementSyncerV2 = (*teamBuilder)(nil)
+)
 
 type teamBuilder struct {
 	client    *grafana.Client
@@ -115,6 +118,9 @@ func (t *teamBuilder) Grants(ctx context.Context, resource *v2.Resource, attrs r
 
 	switch page := attrs.PageToken.Token; page {
 	case syncRolesToken:
+		if !t.syncRoles {
+			return nil, nil, nil
+		}
 		roleGrants, annos, err := t.roleGrants(ctx, resource, teamID)
 		if err != nil {
 			return nil, &rs.SyncOpResults{Annotations: annos}, err

@@ -111,6 +111,17 @@ func TestTeamRoleGrantsPageNotScheduledWhenRoleNotSynced(t *testing.T) {
 	if teamRoleCalls != 0 {
 		t.Fatalf("team-roles endpoint must not be called, got %d calls", teamRoleCalls)
 	}
+
+	resumedGrants, resumedResults, err := builder.Grants(context.Background(), resource, syncAttrs(syncRolesToken))
+	if err != nil {
+		t.Fatalf("Grants resumed role page: %v", err)
+	}
+	if len(resumedGrants) != 0 || nextPageToken(resumedResults) != "" {
+		t.Fatalf("a restored role page must be skipped when roles are out of scope, got grants=%d next=%q", len(resumedGrants), nextPageToken(resumedResults))
+	}
+	if teamRoleCalls != 0 {
+		t.Fatalf("restored role page must not call the team-roles endpoint, got %d calls", teamRoleCalls)
+	}
 }
 
 func TestWillSyncResourceType(t *testing.T) {

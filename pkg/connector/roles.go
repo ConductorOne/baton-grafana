@@ -13,7 +13,10 @@ import (
 	rs "github.com/conductorone/baton-sdk/pkg/types/resource"
 )
 
-var _ connectorbuilder.ResourceSyncerV2 = (*roleBuilder)(nil)
+var (
+	_ connectorbuilder.ResourceSyncerV2          = (*roleBuilder)(nil)
+	_ connectorbuilder.StaticEntitlementSyncerV2 = (*roleBuilder)(nil)
+)
 
 type roleBuilder struct {
 	client *grafana.Client
