@@ -183,9 +183,9 @@ When provisioning is enabled (`BATON_PROVISIONING`), self-hosted also calls writ
 | `POST /api/admin/users` | Creating a new user (`CreateAccount`) |
 | `DELETE /api/admin/users/{id}` | Deleting a user (`Delete`) |
 
-`CreateAccount`'s already-exists handling looks up the existing account by paging the global users list (`GET /api/users`, already required for user sync above), not by ID — so no additional permission beyond user sync is needed for that path.
+`CreateAccount`'s already-exists handling looks up the existing account by scanning the first page of the global users list (`GET /api/users`, already required for user sync above), not by ID — so no additional permission beyond user sync is needed for that path.
 
-**Entitlement provisioning** (Grant/Revoke on organization membership):
+**Entitlement provisioning** (Grant/Revoke on organization and team membership):
 
 | Endpoint | Needed for |
 | :--- | :--- |
@@ -193,6 +193,10 @@ When provisioning is enabled (`BATON_PROVISIONING`), self-hosted also calls writ
 | `GET /api/users/{id}/orgs` | Checking a user's existing org memberships before Grant/Revoke |
 | `POST /api/orgs/{id}/users` | Adding a user to an organization with a role (Grant) |
 | `DELETE /api/orgs/{id}/users/{userId}` | Removing a user from an organization — needed for both Grant (when changing an existing member's role, which removes then re-adds them) and Revoke |
+| `POST /api/teams/{id}/members` | Adding a user to a team (Grant) |
+| `DELETE /api/teams/{id}/members/{userId}` | Removing a user from a team (Revoke) |
+
+On Grafana Enterprise, team membership Grant/Revoke is additionally gated by `teams.permissions:write` — the same RBAC action documented for Cloud's team provisioning above. On OSS, these two endpoints fall under the same **Grafana Admin** server-admin flag gating as the rest of this table.
 
 **Done.** Next, move on to the connector configuration instructions.
 </Tab>
