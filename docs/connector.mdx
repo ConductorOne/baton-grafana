@@ -196,7 +196,7 @@ When provisioning is enabled (`BATON_PROVISIONING`), self-hosted also calls writ
 | `POST /api/teams/{id}/members` | Adding a user to a team (Grant) |
 | `DELETE /api/teams/{id}/members/{userId}` | Removing a user from a team (Revoke) |
 
-On Grafana Enterprise, team membership Grant/Revoke is additionally gated by `teams.permissions:write` — the same RBAC action documented for Cloud's team provisioning above. On OSS, these two endpoints fall under the same **Grafana Admin** server-admin flag gating as the rest of this table.
+On Grafana Enterprise, team membership Grant/Revoke is additionally gated by `teams.permissions:write` — the same RBAC action documented for Cloud's team provisioning above. On OSS, these two endpoints are instead gated by the account's **org Admin** role — a lower, per-organization privilege than the instance-wide **Grafana Admin** server-admin flag that gates the rest of this table.
 
 **Done.** Next, move on to the connector configuration instructions.
 </Tab>
