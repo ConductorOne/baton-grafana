@@ -100,7 +100,7 @@ To create a service account token:
 <Warning>
 **A basic role is required, and no RBAC action substitutes for it**
 
-Before listing anything, the connector validates the credential with `GET /api/org`. That endpoint is gated by a Grafana **basic role**, not by an RBAC action: a service account set to **No basic role** returns `403` there even when every RBAC action below is granted, and assigning `orgs:read` does not satisfy it. Setting the basic role to **Viewer** does.
+The connector calls `GET /api/org` both for the initial credential validation and, in Cloud mode, on every sync as the Organization resource-sync source — so this is not a one-time check, it's needed for every sync. That endpoint is gated by a Grafana **basic role**, not by an RBAC action: a service account set to **No basic role** returns `403` there even when every RBAC action below is granted, and assigning `orgs:read` does not satisfy it. Setting the basic role to **Viewer** does.
 
 Set this in the Grafana UI (**Administration** → **Users and access** → **Service accounts** → your service account → **Basic role**). It cannot currently be set through the API — `PATCH /api/serviceaccounts/{id}` with `{"role":"Viewer"}` returns `HTTP 500` on Grafana Cloud.
 </Warning>
@@ -115,6 +115,16 @@ Use an **Admin** service-account role, or a credential with equivalent permissio
 | `teams.roles:read` | `GET /api/access-control/teams/{id}/roles` | The RBAC roles each team holds — Role sync only |
 | `serviceaccounts:read` | `GET /api/serviceaccounts/search` | Service account sync |
 | `roles:read` | `GET /api/access-control/roles` | Role sync only |
+
+These six actions cover **sync only**. When provisioning is enabled (`BATON_PROVISIONING`), granting and revoking access calls separate write endpoints that need additional RBAC actions:
+
+| Permission | Endpoint | Needed for |
+| :--- | :--- | :--- |
+| `org.users:add` | `POST /api/org/invites` | Inviting/adding a user to the org |
+| `org.users:write` | `PATCH /api/org/users/{id}` | Updating a user's org role |
+| `org.users:remove` | `DELETE /api/org/users/{id}` | Removing a user from the org |
+| `teams.permissions:write` | `POST /api/teams/{id}/members` | Adding a user to a team |
+| `teams.permissions:write` | `DELETE /api/teams/{id}/members/{userId}` | Removing a user from a team |
 
 Team sync always reads team membership, so `teams.permissions:read` is required unconditionally. `teams.roles:read` is only needed when Role sync is enabled — the connector only fetches each team's RBAC roles in that case — same as `roles:read`. A narrower token that previously synced only users/orgs may still fail List after this upgrade, since `teams:read` and `teams.permissions:read` are newly required for team sync regardless of Role sync.
 
