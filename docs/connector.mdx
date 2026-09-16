@@ -112,16 +112,16 @@ Use an **Admin** service-account role, or a credential with equivalent permissio
 | `org.users:read` | `GET /api/org/users` | Account sync (Cloud mode reads organization users) |
 | `teams:read` | `GET /api/teams/search` | Team sync |
 | `teams.permissions:read` | `GET /api/teams/{id}/members` | Team membership grants |
-| `teams.roles:read` | `GET /api/access-control/teams/{id}/roles` | The RBAC roles each team holds |
+| `teams.roles:read` | `GET /api/access-control/teams/{id}/roles` | The RBAC roles each team holds — Role sync only |
 | `serviceaccounts:read` | `GET /api/serviceaccounts/search` | Service account sync |
 | `roles:read` | `GET /api/access-control/roles` | Role sync only |
 
-Team sync reads each team's members and RBAC roles, so `teams.permissions:read` and `teams.roles:read` are required even with Role sync turned off; only `roles:read` is specific to Role sync. A narrower token that previously synced only users/orgs may fail List after this upgrade.
+Team sync always reads team membership, so `teams.permissions:read` is required unconditionally. `teams.roles:read` is only needed when Role sync is enabled — the connector only fetches each team's RBAC roles in that case — same as `roles:read`. A narrower token that previously synced only users/orgs may still fail List after this upgrade, since `teams:read` and `teams.permissions:read` are newly required for team sync regardless of Role sync.
 
 <Note>
-**`roles:read` and `teams.roles:read` cannot be separated with Grafana's built-in roles**
+**With Role sync enabled, `roles:read` and `teams.roles:read` come as a package**
 
-If you are building a least-privilege credential with Role sync disabled, you may want `teams.roles:read` without `roles:read`. No built-in Grafana role expresses that split: `fixed:roles:reader` and `fixed:roles:writer` each grant both actions together, and the only basic roles that grant `roles:read` (`basic:admin` and `basic:grafana_admin`) also grant `teams.roles:read`. `basic:viewer` and `basic:editor` grant neither. Isolating `teams.roles:read` requires a **custom role**.
+No built-in Grafana role grants one of these actions without the other: `fixed:roles:reader` and `fixed:roles:writer` each grant both together, and the basic roles that grant `roles:read` (`basic:admin` and `basic:grafana_admin`) also grant `teams.roles:read`. `basic:viewer` and `basic:editor` grant neither. This is expected — when Role sync is disabled, the connector needs neither action, so there is nothing to isolate; when Role sync is enabled, plan on granting both together (or use a **custom role** if you need to diverge from Grafana's built-in roles for some other reason).
 </Note>
 
 You will need:
@@ -139,7 +139,17 @@ You will need:
 * The username and password for a Grafana account with **admin-level permissions**
 * Your Grafana instance URL
 
-On Grafana Enterprise that account also needs `teams:read` (`GET /api/teams/search`), `teams.permissions:read` (team membership, from `GET /api/teams/{id}/members`), and `teams.roles:read`, which team sync reads for every team, plus `roles:read` when Role sync is enabled. Self-hosted reads users from the global users endpoint rather than `GET /api/org/users`, so `org.users:read` — required in Cloud mode — does not apply here. See the permission table in the **Grafana Cloud** tab above for the full endpoint-by-endpoint mapping, and note that `teams.roles:read` cannot be granted without `roles:read` using Grafana's built-in roles — that split requires a custom role. On OSS, leave Role sync disabled — the access-control API is not present, and the connector skips that step instead of failing.
+On Grafana Enterprise that account also needs `teams:read` (`GET /api/teams/search`) and `teams.permissions:read` (team membership, from `GET /api/teams/{id}/members`) unconditionally, plus `roles:read` and `teams.roles:read` together when Role sync is enabled — the connector only fetches each team's RBAC roles in that case. Self-hosted reads users from the global users endpoint rather than `GET /api/org/users`, so `org.users:read` — required in Cloud mode — does not apply here. See the permission table in the **Grafana Cloud** tab above for the full endpoint-by-endpoint mapping, and note that no built-in Grafana role grants `roles:read` without also granting `teams.roles:read` (or vice versa) — that's expected when Role sync is enabled; a custom role is only needed if you must diverge from that pairing. On OSS, leave Role sync disabled — the access-control API is not present, and the connector skips that step instead of failing.
+
+Beyond team and role permissions, self-hosted org and user sync call instance-admin-scoped endpoints:
+
+| Endpoint | Needed for |
+| :--- | :--- |
+| `GET /api/orgs` | Self-hosted organization sync (lists every org on the instance) |
+| `GET /api/orgs/{id}/users` | Organization membership grants |
+| `GET /api/users` | Global user sync (self-hosted reads all users from this endpoint, not `GET /api/org/users`) |
+
+These three endpoints are part of Grafana's legacy admin API and are gated by the account's **Grafana Admin** (server admin) flag rather than a granular RBAC action — an equivalent admin-level permission is required for each.
 
 **Done.** Next, move on to the connector configuration instructions.
 </Tab>
