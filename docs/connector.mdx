@@ -118,22 +118,24 @@ Use an **Admin** service-account role, or a credential with equivalent permissio
 
 These six actions cover **sync only**. When provisioning is enabled (`BATON_PROVISIONING`), granting and revoking access calls separate write endpoints that need additional RBAC actions. The actions you need depend on which provisioning capability is enabled — **account provisioning** (creating brand-new users) and **entitlement provisioning** (granting/revoking org roles and team membership) call different endpoints and do not require the same permissions.
 
-**Account provisioning** (`CreateAccount`, invite-based in Cloud mode):
+**Account provisioning** (`CreateAccount`, `Delete`):
 
-| Permission | Endpoint | Needed for |
-| :--- | :--- | :--- |
-| `org.users:add` | `POST /api/org/invites` | Inviting a brand-new user into the org |
+| Permission | Needed for |
+| :--- | :--- |
+| `org.users:add` | Inviting a brand-new user into the org (`CreateAccount`, invite-based in Cloud mode, via `POST /api/org/invites`) |
+| `org.users:remove` | Removing a user from the org (`Delete`, via `DELETE /api/org/users/{id}`) — this permission is shared with entitlement provisioning's Revoke below |
 
 **Entitlement provisioning** (Grant/Revoke on the Organizations and Teams resource types):
 
-| Permission | Endpoint | Needed for |
-| :--- | :--- | :--- |
-| `org.users:write` | `PATCH /api/org/users/{id}` | Updating an existing member's org role |
-| `org.users:remove` | `DELETE /api/org/users/{id}` | Removing a user from the org |
-| `teams.permissions:write` | `POST /api/teams/{id}/members` | Adding a user to a team |
-| `teams.permissions:write` | `DELETE /api/teams/{id}/members/{userId}` | Removing a user from a team |
+| Permission | Needed for |
+| :--- | :--- |
+| `org.users:write` | Updating an existing member's org role (Grant, via `PATCH /api/org/users/{id}`) |
+| `org.users:remove` | Removing a user from the org (Revoke, via `DELETE /api/org/users/{id}`) — shared with account provisioning's `Delete` above |
+| `teams.permissions:write` | Adding or removing a team member (Grant/Revoke, via `POST`/`DELETE /api/teams/{id}/members[/{userId}]`) |
 
-A customer who enables entitlement provisioning without account provisioning does not need `org.users:add`: in Cloud mode, Grant only ever updates the role of a user who is already an org member (via `PATCH /api/org/users/{id}`), or fails outright if the user isn't already a member — it never calls the invite endpoint. `POST /api/org/invites` is reached only by `CreateAccount`.
+`org.users:add` is reached only by `CreateAccount`'s invite path. A customer who enables entitlement provisioning without account provisioning does not need it: in Cloud mode, Grant only ever updates the role of a user who is already an org member (via `PATCH /api/org/users/{id}`), or fails outright if the user isn't already a member — it never calls the invite endpoint.
+
+`org.users:remove`, by contrast, is needed independently by **both** capabilities: account provisioning's `Delete` and entitlement provisioning's Revoke both call the same `DELETE /api/org/users/{id}` endpoint. A customer who enables only one of the two capabilities still needs this permission for that capability alone.
 
 Team sync always reads team membership, so `teams.permissions:read` is required unconditionally. `teams.roles:read` is only needed when Role sync is enabled — the connector only fetches each team's RBAC roles in that case — same as `roles:read`. A narrower token that previously synced only users/orgs may still fail List after this upgrade, since `teams:read` and `teams.permissions:read` are newly required for team sync regardless of Role sync.
 
@@ -172,18 +174,25 @@ Beyond team, role, and service-account permissions, self-hosted org and user syn
 
 These three endpoints are part of Grafana's legacy admin API and are gated by the account's **Grafana Admin** (server admin) flag on **OSS**, where RBAC is not available. On **Grafana Enterprise**, RBAC exposes granular actions that can gate these same endpoints instead of relying on the server-admin flag: `orgs:read` for `GET /api/orgs`, `users:read` (scope `global.users:*`) for `GET /api/users`, and `org.users:read` for `GET /api/orgs/{id}/users`.
 
-When provisioning is enabled (`BATON_PROVISIONING`), self-hosted also calls write endpoints:
+When provisioning is enabled (`BATON_PROVISIONING`), self-hosted also calls write endpoints. Like the read endpoints above, these are part of Grafana's legacy admin API and are gated by the account's **Grafana Admin** (server admin) flag.
+
+**Account provisioning** (`CreateAccount`, `Delete`):
 
 | Endpoint | Needed for |
 | :--- | :--- |
-| `POST /api/admin/users` | Account provisioning — creating a new user (`CreateAccount`) |
-| `GET /api/users/{id}` | Account provisioning — looking up an existing user when `CreateAccount` finds the account already exists |
-| `DELETE /api/admin/users/{id}` | Account provisioning — deleting a user |
-| `GET /api/users/{id}/orgs` | Entitlement provisioning — checking a user's existing org memberships before Grant/Revoke |
-| `POST /api/orgs/{id}/users` | Entitlement provisioning — adding a user to an organization with a role (Grant) |
-| `DELETE /api/orgs/{id}/users/{userId}` | Entitlement provisioning — removing a user from an organization (Revoke) |
+| `POST /api/admin/users` | Creating a new user (`CreateAccount`) |
+| `DELETE /api/admin/users/{id}` | Deleting a user (`Delete`) |
 
-Like the read endpoints above, these write endpoints are part of Grafana's legacy admin API and are gated by the account's **Grafana Admin** (server admin) flag.
+`CreateAccount`'s already-exists handling looks up the existing account by paging the global users list (`GET /api/users`, already required for user sync above), not by ID — so no additional permission beyond user sync is needed for that path.
+
+**Entitlement provisioning** (Grant/Revoke on organization membership):
+
+| Endpoint | Needed for |
+| :--- | :--- |
+| `GET /api/users/{id}` | Looking up a user's details when granting org membership (Grant) |
+| `GET /api/users/{id}/orgs` | Checking a user's existing org memberships before Grant/Revoke |
+| `POST /api/orgs/{id}/users` | Adding a user to an organization with a role (Grant) |
+| `DELETE /api/orgs/{id}/users/{userId}` | Removing a user from an organization — needed for both Grant (when changing an existing member's role, which removes then re-adds them) and Revoke |
 
 **Done.** Next, move on to the connector configuration instructions.
 </Tab>
