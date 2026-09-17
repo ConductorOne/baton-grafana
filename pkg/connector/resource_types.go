@@ -1,6 +1,8 @@
 package connector
 
 import (
+	"slices"
+
 	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
 	"github.com/conductorone/baton-sdk/pkg/annotations"
 )
@@ -45,7 +47,7 @@ var (
 		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_GROUP},
 		Annotations: annotations.New(
 			&v2.SkipEntitlements{},
-			capabilityPermissions("teams:read", "teams.permissions:read", "teams.roles:read", "teams.permissions:write"),
+			capabilityPermissions(slices.Concat(teamBaseCapabilityPermissions, []string{"teams.roles:read"})...),
 		),
 	}
 	resourceTypeRole = &v2.ResourceType{

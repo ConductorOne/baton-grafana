@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/conductorone/baton-grafana/pkg/grafana"
@@ -20,6 +21,13 @@ import (
 	"google.golang.org/protobuf/proto"
 )
 
+// teamBaseCapabilityPermissions is the RBAC action set every team sync needs
+// regardless of whether team→role Grants are in scope. teamResourceType adds
+// teams.roles:read on top of this when syncRoles is true; resourceTypeTeam in
+// resource_types.go derives its own permission list from the same slice so
+// the two can't silently drift.
+var teamBaseCapabilityPermissions = []string{"teams:read", "teams.permissions:read", "teams.permissions:write"}
+
 var (
 	_ connectorbuilder.ResourceSyncerV2          = (*teamBuilder)(nil)
 	_ connectorbuilder.StaticEntitlementSyncerV2 = (*teamBuilder)(nil)
@@ -34,11 +42,11 @@ type teamBuilder struct {
 func teamResourceType(syncRoles bool) *v2.ResourceType {
 	rt := proto.Clone(resourceTypeTeam).(*v2.ResourceType)
 	annos := annotations.Annotations(rt.GetAnnotations())
+	perms := teamBaseCapabilityPermissions
 	if syncRoles {
-		annos.Update(capabilityPermissions("teams:read", "teams.permissions:read", "teams.roles:read", "teams.permissions:write"))
-	} else {
-		annos.Update(capabilityPermissions("teams:read", "teams.permissions:read", "teams.permissions:write"))
+		perms = slices.Concat(teamBaseCapabilityPermissions, []string{"teams.roles:read"})
 	}
+	annos.Update(capabilityPermissions(perms...))
 	rt.Annotations = annos
 
 	return rt
