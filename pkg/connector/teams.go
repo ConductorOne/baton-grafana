@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 
 	"github.com/conductorone/baton-grafana/pkg/grafana"
@@ -17,7 +18,15 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
+
+// teamBaseCapabilityPermissions is the RBAC action set every team sync needs
+// regardless of whether team→role Grants are in scope. teamResourceType adds
+// teams.roles:read on top of this when syncRoles is true; resourceTypeTeam in
+// resource_types.go derives its own permission list from the same slice so
+// the two can't silently drift.
+var teamBaseCapabilityPermissions = []string{"teams:read", "teams.permissions:read", "teams.permissions:write"}
 
 var (
 	_ connectorbuilder.ResourceSyncerV2          = (*teamBuilder)(nil)
@@ -25,16 +34,30 @@ var (
 )
 
 type teamBuilder struct {
-	client    *grafana.Client
-	syncRoles bool // false skips the team→role Grants page
+	client       *grafana.Client
+	syncRoles    bool // false skips the team→role Grants page
+	resourceType *v2.ResourceType
+}
+
+func teamResourceType(syncRoles bool) *v2.ResourceType {
+	rt := proto.Clone(resourceTypeTeam).(*v2.ResourceType)
+	annos := annotations.Annotations(rt.GetAnnotations())
+	perms := teamBaseCapabilityPermissions
+	if syncRoles {
+		perms = slices.Concat(teamBaseCapabilityPermissions, []string{"teams.roles:read"})
+	}
+	annos.Update(capabilityPermissions(perms...))
+	rt.Annotations = annos
+
+	return rt
 }
 
 func newTeamBuilder(client *grafana.Client, syncRoles bool) *teamBuilder {
-	return &teamBuilder{client: client, syncRoles: syncRoles}
+	return &teamBuilder{client: client, syncRoles: syncRoles, resourceType: teamResourceType(syncRoles)}
 }
 
 func (t *teamBuilder) ResourceType(_ context.Context) *v2.ResourceType {
-	return resourceTypeTeam
+	return t.resourceType
 }
 
 func teamResource(team *grafana.Team) (*v2.Resource, error) {
