@@ -17,6 +17,7 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -25,16 +26,30 @@ var (
 )
 
 type teamBuilder struct {
-	client    *grafana.Client
-	syncRoles bool // false skips the team→role Grants page
+	client       *grafana.Client
+	syncRoles    bool // false skips the team→role Grants page
+	resourceType *v2.ResourceType
+}
+
+func teamResourceType(syncRoles bool) *v2.ResourceType {
+	rt := proto.Clone(resourceTypeTeam).(*v2.ResourceType)
+	annos := annotations.Annotations(rt.GetAnnotations())
+	if syncRoles {
+		annos.Update(capabilityPermissions("teams:read", "teams.permissions:read", "teams.roles:read", "teams.permissions:write"))
+	} else {
+		annos.Update(capabilityPermissions("teams:read", "teams.permissions:read", "teams.permissions:write"))
+	}
+	rt.Annotations = annos
+
+	return rt
 }
 
 func newTeamBuilder(client *grafana.Client, syncRoles bool) *teamBuilder {
-	return &teamBuilder{client: client, syncRoles: syncRoles}
+	return &teamBuilder{client: client, syncRoles: syncRoles, resourceType: teamResourceType(syncRoles)}
 }
 
 func (t *teamBuilder) ResourceType(_ context.Context) *v2.ResourceType {
-	return resourceTypeTeam
+	return t.resourceType
 }
 
 func teamResource(team *grafana.Team) (*v2.Resource, error) {
