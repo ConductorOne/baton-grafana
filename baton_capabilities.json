@@ -4,13 +4,41 @@
     {
       "resourceType": {
         "id": "org",
-        "displayName": "Organization"
+        "displayName": "Organization",
+        "annotations": [
+          {
+            "@type": "type.googleapis.com/c1.connector.v2.CapabilityPermissions",
+            "permissions": [
+              {
+                "permission": "org.users:read"
+              },
+              {
+                "permission": "org.users:write"
+              },
+              {
+                "permission": "org.users:remove"
+              }
+            ]
+          }
+        ]
       },
       "capabilities": [
         "CAPABILITY_SYNC",
         "CAPABILITY_PROVISION"
       ],
-      "permissions": {}
+      "permissions": {
+        "permissions": [
+          {
+            "permission": "org.users:read"
+          },
+          {
+            "permission": "org.users:write"
+          },
+          {
+            "permission": "org.users:remove"
+          }
+        ]
+      }
     },
     {
       "resourceType": {
@@ -25,13 +53,27 @@
           },
           {
             "@type": "type.googleapis.com/c1.connector.v2.OptInRequired"
+          },
+          {
+            "@type": "type.googleapis.com/c1.connector.v2.CapabilityPermissions",
+            "permissions": [
+              {
+                "permission": "roles:read"
+              }
+            ]
           }
         ]
       },
       "capabilities": [
         "CAPABILITY_SYNC"
       ],
-      "permissions": {},
+      "permissions": {
+        "permissions": [
+          {
+            "permission": "roles:read"
+          }
+        ]
+      },
       "optInRequired": true
     },
     {
@@ -43,6 +85,14 @@
         ],
         "annotations": [
           {
+            "@type": "type.googleapis.com/c1.connector.v2.CapabilityPermissions",
+            "permissions": [
+              {
+                "permission": "serviceaccounts:read"
+              }
+            ]
+          },
+          {
             "@type": "type.googleapis.com/c1.connector.v2.SkipEntitlements"
           }
         ]
@@ -50,7 +100,13 @@
       "capabilities": [
         "CAPABILITY_SYNC"
       ],
-      "permissions": {}
+      "permissions": {
+        "permissions": [
+          {
+            "permission": "serviceaccounts:read"
+          }
+        ]
+      }
     },
     {
       "resourceType": {
@@ -62,6 +118,23 @@
         "annotations": [
           {
             "@type": "type.googleapis.com/c1.connector.v2.SkipEntitlements"
+          },
+          {
+            "@type": "type.googleapis.com/c1.connector.v2.CapabilityPermissions",
+            "permissions": [
+              {
+                "permission": "teams:read"
+              },
+              {
+                "permission": "teams.permissions:read"
+              },
+              {
+                "permission": "teams.permissions:write"
+              },
+              {
+                "permission": "teams.roles:read"
+              }
+            ]
           }
         ]
       },
@@ -69,7 +142,22 @@
         "CAPABILITY_SYNC",
         "CAPABILITY_PROVISION"
       ],
-      "permissions": {}
+      "permissions": {
+        "permissions": [
+          {
+            "permission": "teams:read"
+          },
+          {
+            "permission": "teams.permissions:read"
+          },
+          {
+            "permission": "teams.permissions:write"
+          },
+          {
+            "permission": "teams.roles:read"
+          }
+        ]
+      }
     },
     {
       "resourceType": {
@@ -81,6 +169,20 @@
         "annotations": [
           {
             "@type": "type.googleapis.com/c1.connector.v2.SkipEntitlementsAndGrants"
+          },
+          {
+            "@type": "type.googleapis.com/c1.connector.v2.CapabilityPermissions",
+            "permissions": [
+              {
+                "permission": "org.users:read"
+              },
+              {
+                "permission": "org.users:add"
+              },
+              {
+                "permission": "org.users:remove"
+              }
+            ]
           }
         ]
       },
@@ -89,7 +191,19 @@
         "CAPABILITY_ACCOUNT_PROVISIONING",
         "CAPABILITY_RESOURCE_DELETE"
       ],
-      "permissions": {}
+      "permissions": {
+        "permissions": [
+          {
+            "permission": "org.users:read"
+          },
+          {
+            "permission": "org.users:add"
+          },
+          {
+            "permission": "org.users:remove"
+          }
+        ]
+      }
     }
   ],
   "connectorCapabilities": [
