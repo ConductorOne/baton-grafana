@@ -53,7 +53,7 @@ You can install `baton-grafana` using **Homebrew**, **Docker**, or directly from
       -e BATON_HOSTNAME=<hostname> \
       -e BATON_USERNAME=<username> \
       -e BATON_PASSWORD=<password> \
-      ghcr.io/conductorone/baton-grafana:latest -f "/out/sync.c1z"
+      public.ecr.aws/conductorone/baton-grafana:latest -f "/out/sync.c1z"
 
     docker run --rm -v $(pwd):/out ghcr.io/conductorone/baton:latest -f "/out/sync.c1z" resources
 
