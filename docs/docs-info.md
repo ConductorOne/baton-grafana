@@ -217,11 +217,37 @@ Design notes:
   treat Grafana as the owner of the credential's clock and forward the approved
   duration as `secondsToLive`. A token minted without a forwarded deadline takes
   a 24-hour fallback; `secondsToLive: 0` (never expires) is never sent.
+* The duration sent is the approved remainder **less a 30-second dispatch
+  buffer**, floored to whole seconds. Grafana derives the token's expiry from
+  its own clock when it handles the create, which is later than the clock read
+  used to compute the duration, so the full remainder could produce an expiry
+  past the approved deadline.
+* The buffer is a margin, not a proof. After the create the connector reads the
+  token back through `ListServiceAccountTokensFresh` (uncached — the SDK's HTTP
+  client caches GET responses for an hour) and reports **the provider's own
+  `expiration`** on the issued credential. It fails the issuance, and deletes
+  the token, when the provider reports no expiry, when the expiry cannot be
+  decoded, when the token is absent from the readback, or when the expiry is
+  later than the approved deadline. It never clamps the reported value: a
+  clamped deadline is a locally invented timestamp, not evidence.
+* A cleanup that cannot remove a minted-but-unreportable token is returned
+  alongside the rejection (`errors.Join`), not just logged: the credential is
+  then live and the connector holds its only handle. Cleanup is bounded by a
+  30-second timeout detached from the caller's context.
 * Token names are `c1-<request id>`, and Grafana enforces uniqueness per
   organization. The pre-issuance duplicate lookup is a fast path only: the SDK's
-  HTTP client caches GET responses for an hour by default, so a retry inside
-  that window can read a stale token list — the provider's own name-uniqueness
-  rejection is the guard, and it maps to `AlreadyExists`.
+  HTTP client caches GET responses for an hour, so a retry inside that window
+  can read a stale token list, and a list-before-create is not atomic against a
+  concurrent create either. The provider's own name-uniqueness rejection is the
+  guard; it is classified as a duplicate **only** when Grafana names that
+  conflict ("already exists in the organization"), so an unrelated 400 is never
+  reported as one. A duplicate never revokes the credential that already exists.
+* A create whose response is lost after Grafana committed it is reported as a
+  failure, not retried and not removed: the connector cannot know whether a
+  token exists. The token, if it exists, is named `c1-<request id>`, so the next
+  sync inventories it and it can be revoked by handle; a later attempt for the
+  same request gets the name-conflict rejection rather than minting a second
+  credential.
 * A `404` from the delete route means the token (or its service account) is
   already gone, which the connector reports as a successful deletion. Grafana's
   token store returns `ErrServiceAccountTokenNotFound` for a missing token and

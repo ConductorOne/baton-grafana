@@ -3,7 +3,6 @@ package connector
 import (
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -33,20 +32,30 @@ type tokenFixture struct {
 	// at a time, honoring the request's perpage.
 	serviceAccounts []*grafana.ServiceAccount
 	// tokens maps a service account id to the tokens GET
-	// /api/serviceaccounts/{id}/tokens returns.
+	// /api/serviceaccounts/{id}/tokens returns before any create.
 	tokens map[int][]*grafana.ServiceAccountToken
 	// tokensAfterCreate, when set, replaces tokens once a create has happened.
-	// It models the provider state after a mint whose response the connector
-	// cannot use.
+	// When nil, the fixture synthesizes the token the create response describes,
+	// expiring at createdExpiration.
 	tokensAfterCreate map[int][]*grafana.ServiceAccountToken
-	created           bool
+	// createdExpiration is the expiry the provider reports for the token it just
+	// minted. nil models a provider that reports the token as non-expiring.
+	createdExpiration *time.Time
+	// tokenListStatusAfterCreate, when non-zero, is the status the token list
+	// answers with once a create has happened.
+	tokenListStatusAfterCreate int
+	// tokenListBodyAfterCreate, when set, is written verbatim once a create has
+	// happened, modeling a provider whose expiry cannot be decoded.
+	tokenListBodyAfterCreate string
+	created                  bool
 	// createResponse, when set, is the body POST returns.
 	createResponse *grafana.CreatedServiceAccountToken
 	// createStatus and createBody override the create response for failure cases.
 	createStatus int
 	createBody   map[string]any
-	// deleteStatus overrides the delete response status (0 means 200).
+	// deleteStatus and deleteBody override the delete response (0 means 200).
 	deleteStatus int
+	deleteBody   map[string]any
 	// tokenListStatus overrides the token list response status (0 means 200).
 	tokenListStatus int
 
@@ -82,6 +91,16 @@ func (f *tokenFixture) countMethod(method string) int {
 	n := 0
 	for _, req := range f.recorded() {
 		if req.method == method {
+			n++
+		}
+	}
+	return n
+}
+
+func (f *tokenFixture) countMethodPath(method, path string) int {
+	n := 0
+	for _, req := range f.recorded() {
+		if req.method == method && req.path == path {
 			n++
 		}
 	}
@@ -133,20 +152,60 @@ func (f *tokenFixture) writeServiceAccountsPage(w http.ResponseWriter, r *http.R
 }
 
 func (f *tokenFixture) writeTokenList(w http.ResponseWriter, r *http.Request) {
-	if f.tokenListStatus != 0 {
-		writeJSON(w, f.tokenListStatus, map[string]string{"message": "token list refused"})
-		return
-	}
 	id, err := serviceAccountIDFromTokenPath(r.URL.Path)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
 		return
 	}
-	source := f.tokens
-	if f.created && f.tokensAfterCreate != nil {
-		source = f.tokensAfterCreate
+
+	f.mu.Lock()
+	created := f.created
+	status := f.tokenListStatus
+	statusAfterCreate := f.tokenListStatusAfterCreate
+	bodyAfterCreate := f.tokenListBodyAfterCreate
+	afterCreate := f.tokensAfterCreate
+	createdExpiration := f.createdExpiration
+	createResponse := f.createResponse
+	f.mu.Unlock()
+
+	if !created {
+		if status != 0 {
+			writeJSON(w, status, map[string]string{"message": "token list refused"})
+			return
+		}
+		writeTokens(w, f.tokens[id])
+		return
 	}
-	tokens := source[id]
+
+	if statusAfterCreate != 0 {
+		writeJSON(w, statusAfterCreate, map[string]string{"message": "token list refused after create"})
+		return
+	}
+	if bodyAfterCreate != "" {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(bodyAfterCreate))
+		return
+	}
+	if afterCreate != nil {
+		writeTokens(w, afterCreate[id])
+		return
+	}
+
+	// The provider now reports the token it just minted, with the expiry it
+	// derived from its own clock.
+	created2 := createResponse
+	if created2 == nil {
+		created2 = &grafana.CreatedServiceAccountToken{ID: 41, Name: "c1-ticket-1", Key: "glsa_one_time_value"}
+	}
+	if created2.ID > 0 {
+		writeTokens(w, []*grafana.ServiceAccountToken{{ID: created2.ID, Name: created2.Name, Expiration: createdExpiration}})
+		return
+	}
+	writeTokens(w, nil)
+}
+
+func writeTokens(w http.ResponseWriter, tokens []*grafana.ServiceAccountToken) {
 	if tokens == nil {
 		tokens = []*grafana.ServiceAccountToken{}
 	}
@@ -175,7 +234,11 @@ func (f *tokenFixture) writeCreatedToken(w http.ResponseWriter) {
 
 func (f *tokenFixture) writeDeleteResult(w http.ResponseWriter) {
 	if f.deleteStatus != 0 {
-		writeJSON(w, f.deleteStatus, map[string]string{"message": "Failed to delete service account token"})
+		body := f.deleteBody
+		if body == nil {
+			body = map[string]any{"message": "Failed to delete service account token"}
+		}
+		writeJSON(w, f.deleteStatus, body)
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]string{"message": "Service account token deleted"})
@@ -195,9 +258,9 @@ func newTokenFixtureServer(t *testing.T, fixture *tokenFixture) *httptest.Server
 }
 
 // newUncachedCloudClientForTest builds the same Cloud-mode client as
-// newCloudClientForTest with the SDK's HTTP response cache disabled. Several
-// tests below re-read a provider URL after mutating state at the provider, and
-// the cache would otherwise serve the pre-mutation body for the second read.
+// newCloudClientForTest with the SDK's HTTP response cache disabled. Tests that
+// assert on request counts need this: a cached GET is served without reaching
+// the fixture, which would make a call-count assertion vacuous.
 func newUncachedCloudClientForTest(t *testing.T, ts *httptest.Server) *grafana.Client {
 	t.Helper()
 	t.Setenv("BATON_HTTP_CACHE_TTL", "0")
@@ -244,7 +307,7 @@ func TestServiceAccountTokenLifetime(t *testing.T) {
 	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
 
 	t.Run("a missing deadline takes the explicit fallback, never zero", func(t *testing.T) {
-		seconds, expiresAt, err := serviceAccountTokenLifetime(nil, now)
+		seconds, deadline, err := serviceAccountTokenLifetime(nil, now)
 		if err != nil {
 			t.Fatalf("lifetime: %v", err)
 		}
@@ -254,22 +317,26 @@ func TestServiceAccountTokenLifetime(t *testing.T) {
 		if seconds == 0 {
 			t.Fatal("a missing deadline must never become secondsToLive=0, which Grafana reads as never expires")
 		}
-		if want := now.Add(serviceAccountTokenDefaultTTL); !expiresAt.Equal(want) {
-			t.Fatalf("expected expiry %s, got %s", want, expiresAt)
+		if deadline != nil {
+			t.Fatalf("the connector chose this lifetime, so there is no approved deadline to verify against, got %s", deadline)
 		}
 	})
 
-	t.Run("a requested deadline is forwarded in whole seconds, floored", func(t *testing.T) {
+	t.Run("a requested deadline is forwarded less the dispatch buffer, floored", func(t *testing.T) {
 		requested := now.Add(2*time.Hour + 900*time.Millisecond)
-		seconds, expiresAt, err := serviceAccountTokenLifetime(timestamppb.New(requested), now)
+		seconds, deadline, err := serviceAccountTokenLifetime(timestamppb.New(requested), now)
 		if err != nil {
 			t.Fatalf("lifetime: %v", err)
 		}
-		if want := int64(2*time.Hour/time.Second) + 0; seconds != want {
+		want := int64((2*time.Hour + 900*time.Millisecond - serviceAccountTokenClockSkewBuffer) / time.Second)
+		if seconds != want {
 			t.Fatalf("expected %d seconds, got %d", want, seconds)
 		}
-		if expiresAt.After(requested) {
-			t.Fatalf("reported expiry %s must not exceed the requested deadline %s", expiresAt, requested)
+		if seconds >= int64(2*time.Hour/time.Second) {
+			t.Fatal("the sent lifetime must leave room for the round trip, or the provider's expiry can land past the deadline")
+		}
+		if deadline == nil || !deadline.Equal(requested) {
+			t.Fatalf("expected the approved deadline %s, got %v", requested, deadline)
 		}
 	})
 
@@ -355,6 +422,9 @@ func TestIssueCapabilityDetailsAdvertiseProviderExpiry(t *testing.T) {
 	if descriptor.GetExpiry().GetMin().AsDuration() != serviceAccountTokenMinTTL {
 		t.Fatalf("expected minimum %s, got %s", serviceAccountTokenMinTTL, descriptor.GetExpiry().GetMin().AsDuration())
 	}
+	if descriptor.GetExpiry().GetMax() != nil {
+		t.Fatal("Grafana's token lifetime ceiling is instance-configured and not readable, so no maximum is advertised")
+	}
 	if len(descriptor.GetScopes()) != 0 || descriptor.GetCustomScopesAllowed() {
 		t.Fatal("a Grafana service account token cannot be scoped, so the descriptor must not advertise scopes")
 	}
@@ -379,7 +449,7 @@ func TestCapabilitiesAdvertiseTokenIssuance(t *testing.T) {
 	}
 	md, err := server.GetMetadata(context.Background(), &v2.ConnectorServiceGetMetadataRequest{})
 	if err != nil {
-		t.Fatalf("Metadata: %v", err)
+		t.Fatalf("GetMetadata: %v", err)
 	}
 
 	var found bool
@@ -421,7 +491,7 @@ func TestCapabilitiesOmitTokenIssuanceWithoutTheGrant(t *testing.T) {
 	}
 	md, err := server.GetMetadata(context.Background(), &v2.ConnectorServiceGetMetadataRequest{})
 	if err != nil {
-		t.Fatalf("Metadata: %v", err)
+		t.Fatalf("GetMetadata: %v", err)
 	}
 
 	for _, rtc := range md.GetMetadata().GetCapabilities().GetResourceTypeCapabilities() {
@@ -436,11 +506,10 @@ func TestCapabilitiesOmitTokenIssuanceWithoutTheGrant(t *testing.T) {
 
 // --- Issue ---
 
-func TestIssueForwardsRequestedDeadlineAndMapsTheCredential(t *testing.T) {
-	fixture := &tokenFixture{}
-	ts := newTokenFixtureServer(t, fixture)
-	client := newCloudClientForTest(t, ts)
-	builder := newCredentialServiceAccountBuilder(client, false)
+func TestIssueReportsTheProvidersOwnExpiry(t *testing.T) {
+	providerExpiry := time.Now().UTC().Add(90 * time.Minute).Truncate(time.Second)
+	fixture := &tokenFixture{createdExpiration: &providerExpiry}
+	builder := newCredentialServiceAccountBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)), false)
 
 	requested := time.Now().UTC().Add(3 * time.Hour)
 	input := tokenTestInput("7", "ticket-1")
@@ -451,11 +520,11 @@ func TestIssueForwardsRequestedDeadlineAndMapsTheCredential(t *testing.T) {
 		t.Fatalf("Issue: %v", err)
 	}
 
-	createRequests := fixture.recorded()
-	if len(createRequests) != 2 {
-		t.Fatalf("expected a token list then a create, got %d requests", len(createRequests))
+	requests := fixture.recorded()
+	if len(requests) != 3 {
+		t.Fatalf("expected a pre-check list, a create and a readback, got %d requests: %+v", len(requests), requests)
 	}
-	create := createRequests[1]
+	create := requests[1]
 	if create.method != http.MethodPost || create.path != "/api/serviceaccounts/7/tokens" {
 		t.Fatalf("unexpected create request %s %s", create.method, create.path)
 	}
@@ -469,8 +538,15 @@ func TestIssueForwardsRequestedDeadlineAndMapsTheCredential(t *testing.T) {
 	if secondsToLive <= 0 {
 		t.Fatalf("secondsToLive must be positive, got %v", secondsToLive)
 	}
-	if want := requested.Sub(time.Now().UTC()).Seconds(); secondsToLive > want+1 || secondsToLive < want-5 {
-		t.Fatalf("expected about %v seconds, got %v", want, secondsToLive)
+	// The sent lifetime leaves room for the round trip, so the provider's own
+	// expiry can still land inside the approved deadline.
+	remaining := requested.Sub(time.Now().UTC()).Seconds()
+	bufferSeconds := serviceAccountTokenClockSkewBuffer.Seconds()
+	if secondsToLive > remaining-bufferSeconds {
+		t.Fatalf("expected the dispatch buffer to be removed from %v seconds, got %v", remaining, secondsToLive)
+	}
+	if requests[2].method != http.MethodGet {
+		t.Fatalf("expected the create to be followed by an uncached readback, got %s", requests[2].method)
 	}
 
 	if out.Secret.GetId().GetResourceType() != resourceTypeServiceAccountToken.Id {
@@ -494,8 +570,12 @@ func TestIssueForwardsRequestedDeadlineAndMapsTheCredential(t *testing.T) {
 	if trait.GetIdentityId().GetResource() != "7" {
 		t.Fatalf("the trait identity must be the service account, got %v", trait.GetIdentityId())
 	}
+	// The reported expiry must be the provider's, not a locally derived value.
 	if trait.GetExpiresAt() == nil {
 		t.Fatal("an issued token always expires, so the trait must carry an expiry")
+	}
+	if !trait.GetExpiresAt().AsTime().Equal(providerExpiry) {
+		t.Fatalf("expected the provider's own expiry %s, got %s", providerExpiry, trait.GetExpiresAt().AsTime())
 	}
 	if trait.GetExpiresAt().AsTime().After(requested) {
 		t.Fatalf("reported expiry %s must not exceed the requested %s", trait.GetExpiresAt().AsTime(), requested)
@@ -513,7 +593,8 @@ func TestIssueForwardsRequestedDeadlineAndMapsTheCredential(t *testing.T) {
 }
 
 func TestIssueWithoutDeadlineMintsWithFallbackTTL(t *testing.T) {
-	fixture := &tokenFixture{}
+	providerExpiry := time.Now().UTC().Add(24 * time.Hour)
+	fixture := &tokenFixture{createdExpiration: &providerExpiry}
 	builder := newCredentialServiceAccountBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)), false)
 
 	out, err := builder.Issue(context.Background(), tokenTestInput("7", "ticket-1"))
@@ -535,7 +616,99 @@ func TestIssueWithoutDeadlineMintsWithFallbackTTL(t *testing.T) {
 
 	trait := secretTraitOf(t, out.Secret)
 	if trait.GetExpiresAt() == nil {
-		t.Fatal("the issued credential must report the expiry the connector chose")
+		t.Fatal("the issued credential must report the expiry the provider gave it")
+	}
+}
+
+// TestIssueRejectsAProviderExpiryPastTheApprovedDeadline covers the case the
+// dispatch buffer cannot rule out: the provider handled the create late enough
+// that its own expiry landed after the deadline C1 approved. The connector must
+// not clamp the value it reports, and must not hand back a credential that
+// outlives the request.
+func TestIssueRejectsAProviderExpiryPastTheApprovedDeadline(t *testing.T) {
+	requested := time.Now().UTC().Add(2 * time.Hour).Truncate(time.Second)
+	lateExpiry := requested.Add(time.Second)
+	fixture := &tokenFixture{createdExpiration: &lateExpiry}
+	builder := newCredentialServiceAccountBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)), false)
+
+	input := tokenTestInput("7", "ticket-1")
+	input.ExpiresAt = timestamppb.New(requested)
+
+	out, err := builder.Issue(context.Background(), input)
+	if err == nil {
+		t.Fatalf("expected the issuance to fail, got %v", out)
+	}
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("expected Internal, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "after the approved deadline") {
+		t.Fatalf("the failure should name the deadline breach, got %v", err)
+	}
+	if n := fixture.countMethodPath(http.MethodDelete, "/api/serviceaccounts/7/tokens/41"); n != 1 {
+		t.Fatalf("expected the over-long token to be removed once, got %d deletes: %+v", n, fixture.recorded())
+	}
+}
+
+func TestIssueRejectsANonExpiringTokenFromTheProvider(t *testing.T) {
+	fixture := &tokenFixture{createdExpiration: nil}
+	builder := newCredentialServiceAccountBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)), false)
+
+	input := tokenTestInput("7", "ticket-1")
+	input.ExpiresAt = timestamppb.New(time.Now().UTC().Add(time.Hour))
+
+	if _, err := builder.Issue(context.Background(), input); err == nil {
+		t.Fatal("expected a provider-reported non-expiring token to fail the issuance")
+	}
+	if n := fixture.countMethodPath(http.MethodDelete, "/api/serviceaccounts/7/tokens/41"); n != 1 {
+		t.Fatalf("expected the non-expiring token to be removed once, got %d deletes: %+v", n, fixture.recorded())
+	}
+}
+
+func TestIssueRejectsWhenTheProviderDoesNotReportTheTokenItMinted(t *testing.T) {
+	// The readback answers with a token list that does not contain the created
+	// token, so the connector cannot verify anything about it.
+	fixture := &tokenFixture{tokensAfterCreate: map[int][]*grafana.ServiceAccountToken{7: {}}}
+	builder := newCredentialServiceAccountBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)), false)
+
+	if _, err := builder.Issue(context.Background(), tokenTestInput("7", "ticket-1")); err == nil {
+		t.Fatal("expected the issuance to fail when the created token cannot be read back")
+	}
+	if n := fixture.countMethodPath(http.MethodDelete, "/api/serviceaccounts/7/tokens/41"); n != 1 {
+		t.Fatalf("expected the unverifiable token to be removed once, got %d deletes: %+v", n, fixture.recorded())
+	}
+}
+
+func TestIssueRejectsAnUndecodableProviderExpiry(t *testing.T) {
+	fixture := &tokenFixture{tokenListBodyAfterCreate: `[{"id":41,"name":"c1-ticket-1","expiration":"not-a-timestamp"}]`}
+	builder := newCredentialServiceAccountBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)), false)
+
+	if _, err := builder.Issue(context.Background(), tokenTestInput("7", "ticket-1")); err == nil {
+		t.Fatal("expected a malformed provider expiry to fail the issuance")
+	}
+	if n := fixture.countMethodPath(http.MethodDelete, "/api/serviceaccounts/7/tokens/41"); n != 1 {
+		t.Fatalf("expected the unverifiable token to be removed once, got %d deletes: %+v", n, fixture.recorded())
+	}
+}
+
+func TestIssueSurfacesAFailedCleanup(t *testing.T) {
+	fixture := &tokenFixture{
+		createdExpiration: nil,
+		deleteStatus:      http.StatusInternalServerError,
+	}
+	builder := newCredentialServiceAccountBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)), false)
+
+	input := tokenTestInput("7", "ticket-1")
+	input.ExpiresAt = timestamppb.New(time.Now().UTC().Add(time.Hour))
+
+	_, err := builder.Issue(context.Background(), input)
+	if err == nil {
+		t.Fatal("expected an error")
+	}
+	if !strings.Contains(err.Error(), "may still be live") {
+		t.Fatalf("a cleanup that did not complete must be part of the returned error, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "non-expiring") {
+		t.Fatalf("the rejection reason must survive alongside the cleanup failure, got %v", err)
 	}
 }
 
@@ -557,7 +730,12 @@ func TestIssueRefusesToMintADuplicateForTheSameRequest(t *testing.T) {
 	}
 }
 
-func TestIssueMapsProviderDuplicateNameToAlreadyExists(t *testing.T) {
+// TestIssueReliesOnProviderUniquenessWhenThePrecheckIsStale covers the race the
+// contract records as unresolvable by a list-before-create: the pre-check sees
+// no token (a stale cached read, or a concurrent create), and the provider's own
+// name uniqueness is what stops the duplicate. It must be classified as a
+// duplicate, and the existing credential must not be revoked.
+func TestIssueReliesOnProviderUniquenessWhenThePrecheckIsStale(t *testing.T) {
 	fixture := &tokenFixture{
 		createStatus: http.StatusBadRequest,
 		createBody: map[string]any{
@@ -569,6 +747,63 @@ func TestIssueMapsProviderDuplicateNameToAlreadyExists(t *testing.T) {
 	_, err := builder.Issue(context.Background(), tokenTestInput("7", "ticket-1"))
 	if status.Code(err) != codes.AlreadyExists {
 		t.Fatalf("expected AlreadyExists, got %v", err)
+	}
+	if n := fixture.countMethod(http.MethodPost); n != 1 {
+		t.Fatalf("expected exactly one create attempt, got %d", n)
+	}
+	if n := fixture.countMethod(http.MethodDelete); n != 0 {
+		t.Fatalf("a duplicate must never revoke the credential that already exists, got %d deletes", n)
+	}
+}
+
+// TestIssueClassifiesOnlyARealNameConflictAsDuplicate guards the narrow
+// classification: a 400 for any other reason must not be reported as a
+// duplicate, because that would tell the caller a credential exists when none
+// does.
+func TestIssueClassifiesOnlyARealNameConflictAsDuplicate(t *testing.T) {
+	fixture := &tokenFixture{
+		createStatus: http.StatusBadRequest,
+		createBody:   map[string]any{"message": "Number of seconds before expiration is greater than the global limit"},
+	}
+	builder := newCredentialServiceAccountBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)), false)
+
+	input := tokenTestInput("7", "ticket-1")
+	input.ExpiresAt = timestamppb.New(time.Now().UTC().Add(time.Hour))
+
+	_, err := builder.Issue(context.Background(), input)
+	if err == nil {
+		t.Fatal("a provider rejection must fail the issuance")
+	}
+	if status.Code(err) == codes.AlreadyExists {
+		t.Fatalf("a lifetime rejection is not a name conflict, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "global limit") {
+		t.Fatalf("the provider's reason should survive, got %v", err)
+	}
+}
+
+// TestIssueReadBackBypassesTheResponseCache leaves the SDK's HTTP response cache
+// on: the pre-check's body is cached, and the readback must still observe the
+// token the create added. Without the no-cache readback the second list would be
+// served from the cache and the connector would report a failure.
+func TestIssueReadBackBypassesTheResponseCache(t *testing.T) {
+	providerExpiry := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+	fixture := &tokenFixture{createdExpiration: &providerExpiry}
+	// Deliberately the caching client, not newUncachedCloudClientForTest.
+	builder := newCredentialServiceAccountBuilder(newCloudClientForTest(t, newTokenFixtureServer(t, fixture)), false)
+
+	input := tokenTestInput("7", "ticket-1")
+	input.ExpiresAt = timestamppb.New(time.Now().UTC().Add(2 * time.Hour))
+
+	out, err := builder.Issue(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+	if got := secretTraitOf(t, out.Secret).GetExpiresAt().AsTime(); !got.Equal(providerExpiry) {
+		t.Fatalf("expected the provider expiry %s, got %s", providerExpiry, got)
+	}
+	if n := fixture.countMethodPath(http.MethodGet, "/api/serviceaccounts/7/tokens"); n < 2 {
+		t.Fatalf("the readback must reach the provider, got %d token lists", n)
 	}
 }
 
@@ -592,14 +827,8 @@ func TestIssueCleansUpATokenItCannotHandBack(t *testing.T) {
 	if status.Code(err) != codes.Internal {
 		t.Fatalf("expected Internal, got %v", err)
 	}
-	deletes := 0
-	for _, req := range fixture.recorded() {
-		if req.method == http.MethodDelete && req.path == "/api/serviceaccounts/7/tokens/41" {
-			deletes++
-		}
-	}
-	if deletes != 1 {
-		t.Fatalf("expected the unusable token to be removed once, got %d deletes (err: %v, requests: %+v)", deletes, err, fixture.recorded())
+	if n := fixture.countMethodPath(http.MethodDelete, "/api/serviceaccounts/7/tokens/41"); n != 1 {
+		t.Fatalf("expected the unusable token to be removed once, got %d deletes: %+v", n, fixture.recorded())
 	}
 }
 
@@ -891,23 +1120,4 @@ func TestResourceSyncersGateTokenSupport(t *testing.T) {
 			t.Fatal("issuance must not be advertised when the credential's landing type is not synced")
 		}
 	})
-}
-
-func TestIssueFailsClearlyWhenTheProviderRefusesTheLifetime(t *testing.T) {
-	fixture := &tokenFixture{
-		createStatus: http.StatusBadRequest,
-		createBody:   map[string]any{"message": "Number of seconds before expiration is greater than the global limit"},
-	}
-	builder := newCredentialServiceAccountBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)), false)
-
-	_, err := builder.Issue(context.Background(), tokenTestInput("7", "ticket-1"))
-	if err == nil {
-		t.Fatal("a provider rejection must fail the issuance")
-	}
-	if status.Code(err) == codes.AlreadyExists {
-		t.Fatal("a lifetime rejection is not a duplicate")
-	}
-	if !errors.Is(err, grafana.ErrServiceAccountTokenAlreadyExists) && !strings.Contains(err.Error(), "global limit") {
-		t.Fatalf("the provider's reason should survive, got %v", err)
-	}
 }

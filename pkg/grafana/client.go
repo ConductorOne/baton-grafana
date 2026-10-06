@@ -161,6 +161,9 @@ func (c *Client) ListUsers(ctx context.Context, pVars *PaginationVars) ([]*User,
 
 // doRequest is the only HTTP call site. It always captures rate-limit headers
 // so list and mutate callers can return them to the SDK.
+//
+// extraRequestOptions are appended after the defaults, so a caller can opt a
+// single request out of the SDK's HTTP response cache (uhttp.WithNoCache).
 func (c *Client) doRequest(
 	ctx context.Context,
 	method string,
@@ -168,6 +171,7 @@ func (c *Client) doRequest(
 	response any,
 	data any,
 	paginationVars *PaginationVars,
+	extraRequestOptions ...uhttp.RequestOption,
 ) (annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 	annos := annotations.Annotations{}
@@ -177,6 +181,7 @@ func (c *Client) doRequest(
 		uhttp.WithContentType("application/json"),
 		uhttp.WithAccept("application/json"),
 	}
+	reqOptions = append(reqOptions, extraRequestOptions...)
 
 	// Set authentication method — Bearer (Cloud) or Basic (self-hosted)
 	if c.IsCloud() {
@@ -536,7 +541,26 @@ func (c *Client) ListServiceAccounts(ctx context.Context, pVars *PaginationVars)
 // ListServiceAccountTokens calls GET /api/serviceaccounts/{id}/tokens. The
 // endpoint returns every token of the service account in one response and is
 // not paginated.
+//
+// The response may be served from the SDK's HTTP response cache, which is
+// correct for sync but not for anything that has to observe a change the
+// connector just made. Use ListServiceAccountTokensFresh for that.
 func (c *Client) ListServiceAccountTokens(ctx context.Context, serviceAccountID int) ([]*ServiceAccountToken, annotations.Annotations, error) {
+	return c.listServiceAccountTokens(ctx, serviceAccountID)
+}
+
+// ListServiceAccountTokensFresh is ListServiceAccountTokens with the SDK's HTTP
+// response cache bypassed, so the caller reads the provider's current state
+// rather than a body cached up to an hour ago.
+//
+// Every read whose result is used as evidence about a credential that was just
+// created, revoked, or expired must go through here: a cached body cannot prove
+// anything about a credential minted seconds ago.
+func (c *Client) ListServiceAccountTokensFresh(ctx context.Context, serviceAccountID int) ([]*ServiceAccountToken, annotations.Annotations, error) {
+	return c.listServiceAccountTokens(ctx, serviceAccountID, uhttp.WithNoCache())
+}
+
+func (c *Client) listServiceAccountTokens(ctx context.Context, serviceAccountID int, extraRequestOptions ...uhttp.RequestOption) ([]*ServiceAccountToken, annotations.Annotations, error) {
 	var tokens []*ServiceAccountToken
 	annos, err := c.doRequest(
 		ctx,
@@ -545,6 +569,7 @@ func (c *Client) ListServiceAccountTokens(ctx context.Context, serviceAccountID 
 		&tokens,
 		nil,
 		nil,
+		extraRequestOptions...,
 	)
 	if err != nil {
 		return nil, annos, fmt.Errorf("grafana-client: list service account tokens: %w", err)
@@ -558,9 +583,15 @@ func (c *Client) ListServiceAccountTokens(ctx context.Context, serviceAccountID 
 // treats 0 as "never expires" and any negative value as an invalid expiration,
 // so this method never lets a caller fall through to a non-expiring token.
 //
-// HTTP 400 with "already exists" maps to ErrServiceAccountTokenAlreadyExists.
-// Grafana scopes token-name uniqueness to the organization rather than to the
-// owning service account, and reports the collision as a bad request.
+// A rejected name maps to ErrServiceAccountTokenAlreadyExists. The classification
+// is deliberately narrow: Grafana scopes token-name uniqueness to the
+// organization (the api_key store looks up by org_id + name and returns
+// apikey.ErrDuplicate, which the service-account API renders as
+// serviceaccounts.ErrDuplicateToken with the public message "service account
+// token with given name already exists in the organization"). Only that message
+// is treated as a name conflict — a 400 for any other reason, including an
+// invalid lifetime, stays a plain error, because reporting it as a duplicate
+// would tell the caller a credential exists when none does.
 func (c *Client) CreateServiceAccountToken(ctx context.Context, serviceAccountID int, name string, secondsToLive int64) (*CreatedServiceAccountToken, annotations.Annotations, error) {
 	var created CreatedServiceAccountToken
 	annos, err := c.doRequest(
@@ -572,9 +603,11 @@ func (c *Client) CreateServiceAccountToken(ctx context.Context, serviceAccountID
 		nil,
 	)
 	if err != nil {
-		if status.Code(err) == codes.InvalidArgument &&
-			strings.Contains(strings.ToLower(err.Error()), "already exists") {
-			return nil, annos, fmt.Errorf("%w: %w", ErrServiceAccountTokenAlreadyExists, err)
+		switch status.Code(err) {
+		case codes.InvalidArgument, codes.AlreadyExists:
+			if strings.Contains(strings.ToLower(err.Error()), "already exists in the organization") {
+				return nil, annos, fmt.Errorf("%w: %w", ErrServiceAccountTokenAlreadyExists, err)
+			}
 		}
 		return nil, annos, fmt.Errorf("grafana-client: create service account token: %w", err)
 	}
