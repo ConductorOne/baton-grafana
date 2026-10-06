@@ -533,6 +533,77 @@ func (c *Client) ListServiceAccounts(ctx context.Context, pVars *PaginationVars)
 	return resp.ServiceAccounts, nextPageToken(pVars, uint64(len(resp.ServiceAccounts))), annos, nil
 }
 
+// ListServiceAccountTokens calls GET /api/serviceaccounts/{id}/tokens. The
+// endpoint returns every token of the service account in one response and is
+// not paginated.
+func (c *Client) ListServiceAccountTokens(ctx context.Context, serviceAccountID int) ([]*ServiceAccountToken, annotations.Annotations, error) {
+	var tokens []*ServiceAccountToken
+	annos, err := c.doRequest(
+		ctx,
+		http.MethodGet,
+		c.buildResourceURL(ListServiceAccountTokensPath, serviceAccountID),
+		&tokens,
+		nil,
+		nil,
+	)
+	if err != nil {
+		return nil, annos, fmt.Errorf("grafana-client: list service account tokens: %w", err)
+	}
+
+	return tokens, annos, nil
+}
+
+// CreateServiceAccountToken calls POST /api/serviceaccounts/{id}/tokens with an
+// explicit name and secondsToLive. secondsToLive must be positive: Grafana
+// treats 0 as "never expires" and any negative value as an invalid expiration,
+// so this method never lets a caller fall through to a non-expiring token.
+//
+// HTTP 400 with "already exists" maps to ErrServiceAccountTokenAlreadyExists.
+// Grafana scopes token-name uniqueness to the organization rather than to the
+// owning service account, and reports the collision as a bad request.
+func (c *Client) CreateServiceAccountToken(ctx context.Context, serviceAccountID int, name string, secondsToLive int64) (*CreatedServiceAccountToken, annotations.Annotations, error) {
+	var created CreatedServiceAccountToken
+	annos, err := c.doRequest(
+		ctx,
+		http.MethodPost,
+		c.buildResourceURL(CreateServiceAccountTokenPath, serviceAccountID),
+		&created,
+		&CreateServiceAccountTokenRequest{Name: name, SecondsToLive: secondsToLive},
+		nil,
+	)
+	if err != nil {
+		if status.Code(err) == codes.InvalidArgument &&
+			strings.Contains(strings.ToLower(err.Error()), "already exists") {
+			return nil, annos, fmt.Errorf("%w: %w", ErrServiceAccountTokenAlreadyExists, err)
+		}
+		return nil, annos, fmt.Errorf("grafana-client: create service account token: %w", err)
+	}
+
+	return &created, annos, nil
+}
+
+// DeleteServiceAccountToken calls DELETE /api/serviceaccounts/{id}/tokens/{tokenId}.
+//
+// Grafana answers 404 for a token that is already gone (the store returns
+// ErrServiceAccountTokenNotFound, which carries a 404), and the same 404 for a
+// service account that no longer exists. Both mean the credential is gone, so
+// callers treat codes.NotFound as a successful deletion rather than an error.
+func (c *Client) DeleteServiceAccountToken(ctx context.Context, serviceAccountID int, tokenID int64) (annotations.Annotations, error) {
+	annos, err := c.doRequest(
+		ctx,
+		http.MethodDelete,
+		c.buildResourceURL(DeleteServiceAccountTokenPath, serviceAccountID, tokenID),
+		nil,
+		nil,
+		nil,
+	)
+	if err != nil {
+		return annos, fmt.Errorf("grafana-client: delete service account token: %w", err)
+	}
+
+	return annos, nil
+}
+
 // ListRoles calls GET /api/access-control/roles.
 // The endpoint returns all roles in one response and is not paginated.
 // HTTP 404 maps to ErrRBACUnavailable (OSS build without access-control) and

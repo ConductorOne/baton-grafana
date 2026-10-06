@@ -1,0 +1,913 @@
+package connector
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/conductorone/baton-grafana/pkg/grafana"
+	v2 "github.com/conductorone/baton-sdk/pb/c1/connector/v2"
+	"github.com/conductorone/baton-sdk/pkg/annotations"
+	"github.com/conductorone/baton-sdk/pkg/cli"
+	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/types/known/timestamppb"
+)
+
+// --- fixture ---
+
+// tokenFixture is a fake Grafana service-account API. It records every request
+// it sees so a test can assert the exact route, body and call count.
+type tokenFixture struct {
+	mu sync.Mutex
+	// serviceAccounts is returned by GET /api/serviceaccounts/search, one page
+	// at a time, honoring the request's perpage.
+	serviceAccounts []*grafana.ServiceAccount
+	// tokens maps a service account id to the tokens GET
+	// /api/serviceaccounts/{id}/tokens returns.
+	tokens map[int][]*grafana.ServiceAccountToken
+	// tokensAfterCreate, when set, replaces tokens once a create has happened.
+	// It models the provider state after a mint whose response the connector
+	// cannot use.
+	tokensAfterCreate map[int][]*grafana.ServiceAccountToken
+	created           bool
+	// createResponse, when set, is the body POST returns.
+	createResponse *grafana.CreatedServiceAccountToken
+	// createStatus and createBody override the create response for failure cases.
+	createStatus int
+	createBody   map[string]any
+	// deleteStatus overrides the delete response status (0 means 200).
+	deleteStatus int
+	// tokenListStatus overrides the token list response status (0 means 200).
+	tokenListStatus int
+
+	requests []recordedRequest
+}
+
+type recordedRequest struct {
+	method string
+	path   string
+	body   map[string]any
+}
+
+func (f *tokenFixture) record(r *http.Request) {
+	rec := recordedRequest{method: r.Method, path: r.URL.Path}
+	if r.Body != nil {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
+			rec.body = body
+		}
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.requests = append(f.requests, rec)
+}
+
+func (f *tokenFixture) recorded() []recordedRequest {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]recordedRequest(nil), f.requests...)
+}
+
+func (f *tokenFixture) countMethod(method string) int {
+	n := 0
+	for _, req := range f.recorded() {
+		if req.method == method {
+			n++
+		}
+	}
+	return n
+}
+
+func (f *tokenFixture) handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		f.record(r)
+
+		switch {
+		case r.Method == http.MethodGet && r.URL.Path == "/api/serviceaccounts/search":
+			f.writeServiceAccountsPage(w, r)
+		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/tokens"):
+			f.writeTokenList(w, r)
+		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/tokens"):
+			f.writeCreatedToken(w)
+		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/tokens/"):
+			f.writeDeleteResult(w)
+		default:
+			writeJSON(w, http.StatusNotFound, map[string]string{"message": "unexpected route " + r.URL.Path})
+		}
+	}
+}
+
+func (f *tokenFixture) writeServiceAccountsPage(w http.ResponseWriter, r *http.Request) {
+	page, _ := strconv.Atoi(r.URL.Query().Get("page"))
+	if page < 1 {
+		page = 1
+	}
+	perPage, _ := strconv.Atoi(r.URL.Query().Get("perpage"))
+	if perPage <= 0 {
+		perPage = int(ResourcesPageSize)
+	}
+	start := (page - 1) * perPage
+	if start > len(f.serviceAccounts) {
+		start = len(f.serviceAccounts)
+	}
+	end := start + perPage
+	if end > len(f.serviceAccounts) {
+		end = len(f.serviceAccounts)
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"totalCount":      len(f.serviceAccounts),
+		"serviceAccounts": f.serviceAccounts[start:end],
+		"page":            page,
+		"perPage":         perPage,
+	})
+}
+
+func (f *tokenFixture) writeTokenList(w http.ResponseWriter, r *http.Request) {
+	if f.tokenListStatus != 0 {
+		writeJSON(w, f.tokenListStatus, map[string]string{"message": "token list refused"})
+		return
+	}
+	id, err := serviceAccountIDFromTokenPath(r.URL.Path)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"message": err.Error()})
+		return
+	}
+	source := f.tokens
+	if f.created && f.tokensAfterCreate != nil {
+		source = f.tokensAfterCreate
+	}
+	tokens := source[id]
+	if tokens == nil {
+		tokens = []*grafana.ServiceAccountToken{}
+	}
+	writeJSON(w, http.StatusOK, tokens)
+}
+
+func (f *tokenFixture) writeCreatedToken(w http.ResponseWriter) {
+	f.mu.Lock()
+	f.created = true
+	f.mu.Unlock()
+
+	if f.createStatus != 0 {
+		body := f.createBody
+		if body == nil {
+			body = map[string]any{"message": "create refused"}
+		}
+		writeJSON(w, f.createStatus, body)
+		return
+	}
+	created := f.createResponse
+	if created == nil {
+		created = &grafana.CreatedServiceAccountToken{ID: 41, Name: "c1-ticket-1", Key: "glsa_one_time_value"}
+	}
+	writeJSON(w, http.StatusOK, created)
+}
+
+func (f *tokenFixture) writeDeleteResult(w http.ResponseWriter) {
+	if f.deleteStatus != 0 {
+		writeJSON(w, f.deleteStatus, map[string]string{"message": "Failed to delete service account token"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]string{"message": "Service account token deleted"})
+}
+
+func serviceAccountIDFromTokenPath(path string) (int, error) {
+	trimmed := strings.TrimPrefix(path, "/api/serviceaccounts/")
+	trimmed = strings.TrimSuffix(trimmed, "/tokens")
+	return strconv.Atoi(trimmed)
+}
+
+func newTokenFixtureServer(t *testing.T, fixture *tokenFixture) *httptest.Server {
+	t.Helper()
+	ts := httptest.NewServer(fixture.handler())
+	t.Cleanup(ts.Close)
+	return ts
+}
+
+// newUncachedCloudClientForTest builds the same Cloud-mode client as
+// newCloudClientForTest with the SDK's HTTP response cache disabled. Several
+// tests below re-read a provider URL after mutating state at the provider, and
+// the cache would otherwise serve the pre-mutation body for the second read.
+func newUncachedCloudClientForTest(t *testing.T, ts *httptest.Server) *grafana.Client {
+	t.Helper()
+	t.Setenv("BATON_HTTP_CACHE_TTL", "0")
+	return newCloudClientForTest(t, ts)
+}
+
+// connectorOptsWithSyncSelection builds the connector options C1 passes when it
+// has an explicit resource-type sync selection.
+func connectorOptsWithSyncSelection(resourceTypeIDs []string) *cli.ConnectorOpts {
+	return &cli.ConnectorOpts{SyncResourceTypeIDs: resourceTypeIDs}
+}
+
+func tokenTestInput(serviceAccountID, requestID string) *connectorbuilder.CredentialIssueInput {
+	return &connectorbuilder.CredentialIssueInput{
+		IdentityID: &v2.ResourceId{ResourceType: resourceTypeServiceAccount.Id, Resource: serviceAccountID},
+		CredentialOptions: v2.CredentialIssueOptions_builder{
+			SecretResourceTypeId: resourceTypeServiceAccountToken.Id,
+			ApiKey:               v2.CredentialIssueOptions_ApiKey_builder{}.Build(),
+		}.Build(),
+		RequestID: requestID,
+	}
+}
+
+func secretTraitOf(t *testing.T, resource *v2.Resource) *v2.SecretTrait {
+	t.Helper()
+	if resource == nil {
+		t.Fatal("expected a secret resource")
+	}
+	trait := &v2.SecretTrait{}
+	secretAnnotations := annotations.Annotations(resource.GetAnnotations())
+	found, err := secretAnnotations.Pick(trait)
+	if err != nil {
+		t.Fatalf("pick secret trait: %v", err)
+	}
+	if !found {
+		t.Fatalf("resource %q carries no SecretTrait", resource.GetId().GetResource())
+	}
+	return trait
+}
+
+// --- lifetime resolution ---
+
+func TestServiceAccountTokenLifetime(t *testing.T) {
+	now := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+
+	t.Run("a missing deadline takes the explicit fallback, never zero", func(t *testing.T) {
+		seconds, expiresAt, err := serviceAccountTokenLifetime(nil, now)
+		if err != nil {
+			t.Fatalf("lifetime: %v", err)
+		}
+		if seconds != int64(serviceAccountTokenDefaultTTL/time.Second) {
+			t.Fatalf("expected the fallback lifetime %d, got %d", int64(serviceAccountTokenDefaultTTL/time.Second), seconds)
+		}
+		if seconds == 0 {
+			t.Fatal("a missing deadline must never become secondsToLive=0, which Grafana reads as never expires")
+		}
+		if want := now.Add(serviceAccountTokenDefaultTTL); !expiresAt.Equal(want) {
+			t.Fatalf("expected expiry %s, got %s", want, expiresAt)
+		}
+	})
+
+	t.Run("a requested deadline is forwarded in whole seconds, floored", func(t *testing.T) {
+		requested := now.Add(2*time.Hour + 900*time.Millisecond)
+		seconds, expiresAt, err := serviceAccountTokenLifetime(timestamppb.New(requested), now)
+		if err != nil {
+			t.Fatalf("lifetime: %v", err)
+		}
+		if want := int64(2*time.Hour/time.Second) + 0; seconds != want {
+			t.Fatalf("expected %d seconds, got %d", want, seconds)
+		}
+		if expiresAt.After(requested) {
+			t.Fatalf("reported expiry %s must not exceed the requested deadline %s", expiresAt, requested)
+		}
+	})
+
+	t.Run("a deadline below the connector minimum fails instead of minting", func(t *testing.T) {
+		requested := now.Add(serviceAccountTokenMinTTL - time.Second)
+		seconds, _, err := serviceAccountTokenLifetime(timestamppb.New(requested), now)
+		if err == nil {
+			t.Fatal("expected an error for a deadline below the minimum")
+		}
+		if status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("expected InvalidArgument, got %v", err)
+		}
+		if seconds != 0 {
+			t.Fatalf("a rejected deadline must not yield a lifetime, got %d", seconds)
+		}
+	})
+
+	t.Run("a deadline in the past fails", func(t *testing.T) {
+		if _, _, err := serviceAccountTokenLifetime(timestamppb.New(now.Add(-time.Minute)), now); err == nil {
+			t.Fatal("expected an error for a past deadline")
+		}
+	})
+
+	t.Run("an invalid timestamp fails", func(t *testing.T) {
+		if _, _, err := serviceAccountTokenLifetime(&timestamppb.Timestamp{Seconds: -1, Nanos: -1}, now); err == nil {
+			t.Fatal("expected an error for an invalid timestamp")
+		}
+	})
+}
+
+// --- handle ---
+
+func TestServiceAccountTokenHandleRoundTrip(t *testing.T) {
+	handle := serviceAccountTokenHandle("7", 41)
+	if handle != "7.41" {
+		t.Fatalf("unexpected handle %q", handle)
+	}
+	serviceAccountID, tokenID, err := parseServiceAccountTokenHandle(handle)
+	if err != nil {
+		t.Fatalf("parse: %v", err)
+	}
+	if serviceAccountID != 7 || tokenID != 41 {
+		t.Fatalf("expected (7, 41), got (%d, %d)", serviceAccountID, tokenID)
+	}
+}
+
+func TestParseServiceAccountTokenHandleRejectsMalformed(t *testing.T) {
+	for _, handle := range []string{"", "41", "7.", ".41", "0.41", "7.0", "seven.41", "7.forty", "7.41.9", "7.41/extra"} {
+		if _, _, err := parseServiceAccountTokenHandle(handle); err == nil {
+			t.Fatalf("handle %q must be rejected", handle)
+		}
+	}
+}
+
+// --- capabilities ---
+
+func TestIssueCapabilityDetailsAdvertiseProviderExpiry(t *testing.T) {
+	builder := newCredentialServiceAccountBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, &tokenFixture{})), false)
+
+	details, _, err := builder.IssueCapabilityDetails(context.Background())
+	if err != nil {
+		t.Fatalf("IssueCapabilityDetails: %v", err)
+	}
+	if len(details.GetOptions()) != 1 {
+		t.Fatalf("expected exactly one advertised option, got %d", len(details.GetOptions()))
+	}
+	descriptor := details.GetOptions()[0]
+	if descriptor.GetOption() != v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_API_KEY {
+		t.Fatalf("expected the API_KEY shape, got %s", descriptor.GetOption())
+	}
+	if descriptor.GetSecretResourceTypeId() != resourceTypeServiceAccountToken.Id {
+		t.Fatalf("expected secret resource type %q, got %q", resourceTypeServiceAccountToken.Id, descriptor.GetSecretResourceTypeId())
+	}
+	if descriptor.GetResourceMode() != v2.CredentialResourceMode_CREDENTIAL_RESOURCE_MODE_DISCOVERABLE {
+		t.Fatalf("a synced token is discoverable, got %s", descriptor.GetResourceMode())
+	}
+	// The expiry capability is what makes C1 treat Grafana as the owner of this
+	// credential's clock and forward the approved deadline instead of queueing a
+	// provider delete at its own expiry.
+	if descriptor.GetExpiry() == nil {
+		t.Fatal("the descriptor must declare an issuance expiry capability")
+	}
+	if descriptor.GetExpiry().GetMin().AsDuration() != serviceAccountTokenMinTTL {
+		t.Fatalf("expected minimum %s, got %s", serviceAccountTokenMinTTL, descriptor.GetExpiry().GetMin().AsDuration())
+	}
+	if len(descriptor.GetScopes()) != 0 || descriptor.GetCustomScopesAllowed() {
+		t.Fatal("a Grafana service account token cannot be scoped, so the descriptor must not advertise scopes")
+	}
+	if details.GetPreferredOption() != v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_API_KEY {
+		t.Fatalf("unexpected preferred option %s", details.GetPreferredOption())
+	}
+}
+
+// TestCapabilitiesAdvertiseTokenIssuance runs the connector through the SDK's
+// own capability builder, which is what validates that every advertised
+// issuance option has a registered revoke path for the resource type it names.
+func TestCapabilitiesAdvertiseTokenIssuance(t *testing.T) {
+	fixture := &tokenFixture{}
+	g := &Grafana{
+		client:                   newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)),
+		SyncServiceAccountTokens: true,
+	}
+
+	server, err := connectorbuilder.NewConnector(context.Background(), g)
+	if err != nil {
+		t.Fatalf("NewConnector: %v", err)
+	}
+	md, err := server.GetMetadata(context.Background(), &v2.ConnectorServiceGetMetadataRequest{})
+	if err != nil {
+		t.Fatalf("Metadata: %v", err)
+	}
+
+	var found bool
+	for _, rtc := range md.GetMetadata().GetCapabilities().GetResourceTypeCapabilities() {
+		if rtc.GetResourceType().GetId() != resourceTypeServiceAccount.Id {
+			continue
+		}
+		for _, descriptor := range rtc.GetCredentialIssue().GetOptions() {
+			if descriptor.GetSecretResourceTypeId() == resourceTypeServiceAccountToken.Id {
+				found = true
+			}
+		}
+	}
+	if !found {
+		t.Fatal("the service account type must advertise the service account token issuance option")
+	}
+
+	var tokenTypeDeclared bool
+	for _, rtc := range md.GetMetadata().GetCapabilities().GetResourceTypeCapabilities() {
+		if rtc.GetResourceType().GetId() == resourceTypeServiceAccountToken.Id {
+			tokenTypeDeclared = true
+			if !rtc.GetOptInRequired() {
+				t.Fatal("the token type must be opt-in: it needs serviceaccounts:write and is not wanted by every tenant")
+			}
+		}
+	}
+	if !tokenTypeDeclared {
+		t.Fatal("the token resource type must be declared, or C1 cannot resolve the credential's landing type")
+	}
+}
+
+func TestCapabilitiesOmitTokenIssuanceWithoutTheGrant(t *testing.T) {
+	fixture := &tokenFixture{}
+	g := &Grafana{client: newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture))}
+
+	server, err := connectorbuilder.NewConnector(context.Background(), g)
+	if err != nil {
+		t.Fatalf("NewConnector: %v", err)
+	}
+	md, err := server.GetMetadata(context.Background(), &v2.ConnectorServiceGetMetadataRequest{})
+	if err != nil {
+		t.Fatalf("Metadata: %v", err)
+	}
+
+	for _, rtc := range md.GetMetadata().GetCapabilities().GetResourceTypeCapabilities() {
+		if rtc.GetResourceType().GetId() == resourceTypeServiceAccountToken.Id {
+			t.Fatal("without the grant the token type must not be registered")
+		}
+		if rtc.GetCredentialIssue() != nil {
+			t.Fatalf("without the grant %q must not advertise credential issuance", rtc.GetResourceType().GetId())
+		}
+	}
+}
+
+// --- Issue ---
+
+func TestIssueForwardsRequestedDeadlineAndMapsTheCredential(t *testing.T) {
+	fixture := &tokenFixture{}
+	ts := newTokenFixtureServer(t, fixture)
+	client := newCloudClientForTest(t, ts)
+	builder := newCredentialServiceAccountBuilder(client, false)
+
+	requested := time.Now().UTC().Add(3 * time.Hour)
+	input := tokenTestInput("7", "ticket-1")
+	input.ExpiresAt = timestamppb.New(requested)
+
+	out, err := builder.Issue(context.Background(), input)
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	createRequests := fixture.recorded()
+	if len(createRequests) != 2 {
+		t.Fatalf("expected a token list then a create, got %d requests", len(createRequests))
+	}
+	create := createRequests[1]
+	if create.method != http.MethodPost || create.path != "/api/serviceaccounts/7/tokens" {
+		t.Fatalf("unexpected create request %s %s", create.method, create.path)
+	}
+	if got := create.body["name"]; got != "c1-ticket-1" {
+		t.Fatalf("expected the deterministic name c1-ticket-1, got %v", got)
+	}
+	secondsToLive, ok := create.body["secondsToLive"].(float64)
+	if !ok {
+		t.Fatalf("secondsToLive must be sent, got %v", create.body["secondsToLive"])
+	}
+	if secondsToLive <= 0 {
+		t.Fatalf("secondsToLive must be positive, got %v", secondsToLive)
+	}
+	if want := requested.Sub(time.Now().UTC()).Seconds(); secondsToLive > want+1 || secondsToLive < want-5 {
+		t.Fatalf("expected about %v seconds, got %v", want, secondsToLive)
+	}
+
+	if out.Secret.GetId().GetResourceType() != resourceTypeServiceAccountToken.Id {
+		t.Fatalf("unexpected secret resource type %q", out.Secret.GetId().GetResourceType())
+	}
+	if out.Secret.GetId().GetResource() != "7.41" {
+		t.Fatalf("expected the packed revocation handle 7.41, got %q", out.Secret.GetId().GetResource())
+	}
+	if out.Secret.GetParentResourceId().GetResource() != "7" ||
+		out.Secret.GetParentResourceId().GetResourceType() != resourceTypeServiceAccount.Id {
+		t.Fatalf("unexpected parent %v", out.Secret.GetParentResourceId())
+	}
+	if out.ResourceMode != v2.CredentialResourceMode_CREDENTIAL_RESOURCE_MODE_DISCOVERABLE {
+		t.Fatalf("unexpected resource mode %s", out.ResourceMode)
+	}
+
+	trait := secretTraitOf(t, out.Secret)
+	if trait.GetCredentialDetail() != serviceAccountTokenDetail {
+		t.Fatalf("expected credential detail %q, got %q", serviceAccountTokenDetail, trait.GetCredentialDetail())
+	}
+	if trait.GetIdentityId().GetResource() != "7" {
+		t.Fatalf("the trait identity must be the service account, got %v", trait.GetIdentityId())
+	}
+	if trait.GetExpiresAt() == nil {
+		t.Fatal("an issued token always expires, so the trait must carry an expiry")
+	}
+	if trait.GetExpiresAt().AsTime().After(requested) {
+		t.Fatalf("reported expiry %s must not exceed the requested %s", trait.GetExpiresAt().AsTime(), requested)
+	}
+
+	if len(out.PlaintextData) != 1 {
+		t.Fatalf("expected one plaintext value, got %d", len(out.PlaintextData))
+	}
+	if out.PlaintextData[0].GetName() != serviceAccountTokenPlaintextName {
+		t.Fatalf("unexpected plaintext name %q", out.PlaintextData[0].GetName())
+	}
+	if string(out.PlaintextData[0].GetBytes()) != "glsa_one_time_value" {
+		t.Fatalf("unexpected plaintext value %q", out.PlaintextData[0].GetBytes())
+	}
+}
+
+func TestIssueWithoutDeadlineMintsWithFallbackTTL(t *testing.T) {
+	fixture := &tokenFixture{}
+	builder := newCredentialServiceAccountBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)), false)
+
+	out, err := builder.Issue(context.Background(), tokenTestInput("7", "ticket-1"))
+	if err != nil {
+		t.Fatalf("Issue: %v", err)
+	}
+
+	create := fixture.recorded()[1]
+	secondsToLive, ok := create.body["secondsToLive"].(float64)
+	if !ok {
+		t.Fatalf("secondsToLive must be sent, got %v", create.body["secondsToLive"])
+	}
+	if secondsToLive != float64(serviceAccountTokenDefaultTTL/time.Second) {
+		t.Fatalf("expected the fallback lifetime %d, got %v", int64(serviceAccountTokenDefaultTTL/time.Second), secondsToLive)
+	}
+	if secondsToLive == 0 {
+		t.Fatal("a request without a deadline must never mint a non-expiring token")
+	}
+
+	trait := secretTraitOf(t, out.Secret)
+	if trait.GetExpiresAt() == nil {
+		t.Fatal("the issued credential must report the expiry the connector chose")
+	}
+}
+
+func TestIssueRefusesToMintADuplicateForTheSameRequest(t *testing.T) {
+	fixture := &tokenFixture{tokens: map[int][]*grafana.ServiceAccountToken{
+		7: {{ID: 41, Name: "c1-ticket-1"}},
+	}}
+	builder := newCredentialServiceAccountBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)), false)
+
+	_, err := builder.Issue(context.Background(), tokenTestInput("7", "ticket-1"))
+	if err == nil {
+		t.Fatal("expected the retry to fail rather than mint a second token")
+	}
+	if status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("expected AlreadyExists, got %v", err)
+	}
+	if n := fixture.countMethod(http.MethodPost); n != 0 {
+		t.Fatalf("a duplicate must be detected before the provider is asked to mint, got %d creates", n)
+	}
+}
+
+func TestIssueMapsProviderDuplicateNameToAlreadyExists(t *testing.T) {
+	fixture := &tokenFixture{
+		createStatus: http.StatusBadRequest,
+		createBody: map[string]any{
+			"message": "service account token with given name already exists in the organization",
+		},
+	}
+	builder := newCredentialServiceAccountBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)), false)
+
+	_, err := builder.Issue(context.Background(), tokenTestInput("7", "ticket-1"))
+	if status.Code(err) != codes.AlreadyExists {
+		t.Fatalf("expected AlreadyExists, got %v", err)
+	}
+}
+
+func TestIssueCleansUpATokenItCannotHandBack(t *testing.T) {
+	fixture := &tokenFixture{
+		// Grafana answered, but without an id there is no revocation handle and
+		// without a value there is nothing to deliver.
+		createResponse: &grafana.CreatedServiceAccountToken{Name: "c1-ticket-1"},
+		// The token exists at the provider only after the mint, which is what
+		// forces the cleanup to resolve it by name.
+		tokensAfterCreate: map[int][]*grafana.ServiceAccountToken{
+			7: {{ID: 41, Name: "c1-ticket-1"}},
+		},
+	}
+	builder := newCredentialServiceAccountBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)), false)
+
+	_, err := builder.Issue(context.Background(), tokenTestInput("7", "ticket-1"))
+	if err == nil {
+		t.Fatal("expected an error when the provider returns no id or value")
+	}
+	if status.Code(err) != codes.Internal {
+		t.Fatalf("expected Internal, got %v", err)
+	}
+	deletes := 0
+	for _, req := range fixture.recorded() {
+		if req.method == http.MethodDelete && req.path == "/api/serviceaccounts/7/tokens/41" {
+			deletes++
+		}
+	}
+	if deletes != 1 {
+		t.Fatalf("expected the unusable token to be removed once, got %d deletes (err: %v, requests: %+v)", deletes, err, fixture.recorded())
+	}
+}
+
+func TestIssueRejectsScopedRequests(t *testing.T) {
+	fixture := &tokenFixture{}
+	builder := newCredentialServiceAccountBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)), false)
+
+	input := tokenTestInput("7", "ticket-1")
+	input.CredentialOptions = v2.CredentialIssueOptions_builder{
+		SecretResourceTypeId: resourceTypeServiceAccountToken.Id,
+		ApiKey:               v2.CredentialIssueOptions_ApiKey_builder{Scopes: []string{"metrics:read"}}.Build(),
+	}.Build()
+
+	if _, err := builder.Issue(context.Background(), input); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("expected InvalidArgument, got %v", err)
+	}
+	if n := fixture.countMethod(http.MethodPost); n != 0 {
+		t.Fatalf("a rejected request must not reach the provider, got %d creates", n)
+	}
+}
+
+func TestIssueRequiresAServiceAccountIdentity(t *testing.T) {
+	fixture := &tokenFixture{}
+	builder := newCredentialServiceAccountBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)), false)
+
+	for _, input := range []*connectorbuilder.CredentialIssueInput{
+		nil,
+		tokenTestInput("not-a-number", "ticket-1"),
+		{IdentityID: &v2.ResourceId{ResourceType: resourceTypeUser.Id, Resource: "3"}, RequestID: "ticket-1"},
+	} {
+		if _, err := builder.Issue(context.Background(), input); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("expected InvalidArgument for %v, got %v", input, err)
+		}
+	}
+}
+
+// --- Delete ---
+
+func TestDeleteTreatsAnAlreadyGoneTokenAsSuccess(t *testing.T) {
+	fixture := &tokenFixture{deleteStatus: http.StatusNotFound}
+	builder := newServiceAccountTokenBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)))
+
+	_, err := builder.Delete(context.Background(), &v2.ResourceId{
+		ResourceType: resourceTypeServiceAccountToken.Id,
+		Resource:     "7.41",
+	}, nil)
+	if err != nil {
+		t.Fatalf("a provider that already deleted the token is the outcome the caller asked for: %v", err)
+	}
+
+	if len(fixture.recorded()) != 1 {
+		t.Fatalf("expected exactly one provider call, got %d", len(fixture.recorded()))
+	}
+	req := fixture.recorded()[0]
+	if req.method != http.MethodDelete || req.path != "/api/serviceaccounts/7/tokens/41" {
+		t.Fatalf("unexpected delete request %s %s", req.method, req.path)
+	}
+}
+
+func TestDeletePropagatesRealProviderFailures(t *testing.T) {
+	fixture := &tokenFixture{deleteStatus: http.StatusInternalServerError}
+	builder := newServiceAccountTokenBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)))
+
+	_, err := builder.Delete(context.Background(), &v2.ResourceId{
+		ResourceType: resourceTypeServiceAccountToken.Id,
+		Resource:     "7.41",
+	}, nil)
+	if err == nil {
+		t.Fatal("a provider failure that is not 'already gone' must not be reported as success")
+	}
+}
+
+func TestDeleteRejectsMalformedHandles(t *testing.T) {
+	fixture := &tokenFixture{}
+	builder := newServiceAccountTokenBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)))
+
+	for _, id := range []*v2.ResourceId{
+		nil,
+		{ResourceType: resourceTypeServiceAccountToken.Id, Resource: ""},
+		{ResourceType: resourceTypeServiceAccountToken.Id, Resource: "41"},
+		{ResourceType: resourceTypeServiceAccount.Id, Resource: "7.41"},
+	} {
+		if _, err := builder.Delete(context.Background(), id, nil); status.Code(err) != codes.InvalidArgument {
+			t.Fatalf("expected InvalidArgument for %v, got %v", id, err)
+		}
+	}
+	if n := fixture.countMethod(http.MethodDelete); n != 0 {
+		t.Fatalf("a malformed handle must not reach the provider, got %d deletes", n)
+	}
+}
+
+// --- List ---
+
+func TestListWalksServiceAccountsThenTheirTokens(t *testing.T) {
+	expiry := time.Date(2026, 10, 7, 12, 0, 0, 0, time.UTC)
+	created := time.Date(2026, 10, 6, 12, 0, 0, 0, time.UTC)
+	fixture := &tokenFixture{
+		serviceAccounts: []*grafana.ServiceAccount{
+			{ID: 7, Name: "sa-seven"},
+			{ID: 8, Name: "sa-eight"},
+		},
+		tokens: map[int][]*grafana.ServiceAccountToken{
+			7: {
+				{ID: 41, Name: "c1-ticket-1", Created: &created, Expiration: &expiry},
+				{ID: 42, Name: "never-expires", Created: &created},
+			},
+			8: {{ID: 43, Name: "c1-ticket-2", Created: &created}},
+		},
+	}
+	builder := newServiceAccountTokenBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)))
+
+	byHandle := map[string]*v2.Resource{}
+	pageToken := ""
+	for range 10 {
+		resources, results, err := builder.List(context.Background(), nil, syncAttrs(pageToken))
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		for _, resource := range resources {
+			byHandle[resource.GetId().GetResource()] = resource
+		}
+		pageToken = nextPageToken(results)
+		if pageToken == "" {
+			break
+		}
+	}
+	if pageToken != "" {
+		t.Fatal("the walk did not terminate")
+	}
+
+	if len(byHandle) != 3 {
+		t.Fatalf("expected 3 tokens, got %d (%v)", len(byHandle), byHandle)
+	}
+
+	expiring, ok := byHandle["7.41"]
+	if !ok {
+		t.Fatal("expected the token 7.41 to be synced")
+	}
+	if expiring.GetParentResourceId().GetResource() != "7" {
+		t.Fatalf("expected parent service account 7, got %v", expiring.GetParentResourceId())
+	}
+	trait := secretTraitOf(t, expiring)
+	if trait.GetIdentityId().GetResource() != "7" {
+		t.Fatalf("the token's identity must be its owning service account, got %v", trait.GetIdentityId())
+	}
+	if trait.GetCredentialDetail() != serviceAccountTokenDetail {
+		t.Fatalf("unexpected credential detail %q", trait.GetCredentialDetail())
+	}
+	if trait.GetExpiresAt() == nil || !trait.GetExpiresAt().AsTime().Equal(expiry) {
+		t.Fatalf("expected the provider expiry %s, got %v", expiry, trait.GetExpiresAt())
+	}
+
+	// A token Grafana reports as non-expiring must not be given an expiry the
+	// provider never asserted.
+	if nonExpiring, ok := byHandle["7.42"]; ok {
+		if got := secretTraitOf(t, nonExpiring).GetExpiresAt(); got != nil {
+			t.Fatalf("a non-expiring token must carry no expiry, got %s", got)
+		}
+	} else {
+		t.Fatal("expected the non-expiring token 7.42 to be synced")
+	}
+
+	if _, ok := byHandle["8.43"]; !ok {
+		t.Fatal("expected the second service account's token 8.43 to be synced")
+	}
+}
+
+// TestListPaginatesTheServiceAccountLevel proves the service-account level
+// advances: a full page hands back a next token, and the walk only reaches the
+// last account's tokens after fetching the second page.
+func TestListPaginatesTheServiceAccountLevel(t *testing.T) {
+	const accounts = int(ResourcesPageSize) + 1
+	serviceAccounts := make([]*grafana.ServiceAccount, 0, accounts)
+	for id := 1; id <= accounts; id++ {
+		serviceAccounts = append(serviceAccounts, &grafana.ServiceAccount{ID: id, Name: fmt.Sprintf("sa-%d", id)})
+	}
+	fixture := &tokenFixture{
+		serviceAccounts: serviceAccounts,
+		tokens: map[int][]*grafana.ServiceAccountToken{
+			accounts: {{ID: 900, Name: "c1-last"}},
+		},
+	}
+	builder := newServiceAccountTokenBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)))
+
+	found := map[string]bool{}
+	pageToken := ""
+	for range accounts + 10 {
+		resources, results, err := builder.List(context.Background(), nil, syncAttrs(pageToken))
+		if err != nil {
+			t.Fatalf("List: %v", err)
+		}
+		for _, resource := range resources {
+			found[resource.GetId().GetResource()] = true
+		}
+		pageToken = nextPageToken(results)
+		if pageToken == "" {
+			break
+		}
+	}
+	if pageToken != "" {
+		t.Fatal("the walk did not terminate")
+	}
+	if !found[fmt.Sprintf("%d.900", accounts)] {
+		t.Fatalf("expected the token on the second service-account page to be synced, got %v", found)
+	}
+
+	var searches int
+	for _, req := range fixture.recorded() {
+		if req.method == http.MethodGet && req.path == "/api/serviceaccounts/search" {
+			searches++
+		}
+	}
+	if searches != 2 {
+		t.Fatalf("expected exactly two service-account search pages, got %d", searches)
+	}
+}
+
+func TestListFailsClosedWhenTokensCannotBeRead(t *testing.T) {
+	fixture := &tokenFixture{
+		serviceAccounts: []*grafana.ServiceAccount{{ID: 7, Name: "sa-seven"}},
+		tokenListStatus: http.StatusForbidden,
+	}
+	builder := newServiceAccountTokenBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)))
+
+	var err error
+	pageToken := ""
+	for range 5 {
+		_, results, listErr := builder.List(context.Background(), nil, syncAttrs(pageToken))
+		if listErr != nil {
+			err = listErr
+			break
+		}
+		pageToken = nextPageToken(results)
+		if pageToken == "" {
+			break
+		}
+	}
+	if err == nil {
+		t.Fatal("a denied token list must fail the sync rather than report the account as having no tokens")
+	}
+	if !strings.Contains(err.Error(), "serviceaccounts:read") {
+		t.Fatalf("the failure should name the missing permission, got %v", err)
+	}
+}
+
+// --- registration gating ---
+
+func TestResourceSyncersGateTokenSupport(t *testing.T) {
+	typesFor := func(t *testing.T, syncTokens bool, syncSelection []string) map[string]connectorbuilder.ResourceSyncerV2 {
+		t.Helper()
+		client := newUncachedCloudClientForTest(t, newTokenFixtureServer(t, &tokenFixture{}))
+		g := &Grafana{client: client, SyncServiceAccountTokens: syncTokens}
+		if syncSelection != nil {
+			g.connectorOpts = connectorOptsWithSyncSelection(syncSelection)
+		}
+		syncers := map[string]connectorbuilder.ResourceSyncerV2{}
+		for _, syncer := range g.ResourceSyncers(context.Background()) {
+			syncers[syncer.ResourceType(context.Background()).GetId()] = syncer
+		}
+		return syncers
+	}
+
+	t.Run("no grant means no token type and no issuance", func(t *testing.T) {
+		syncers := typesFor(t, false, nil)
+		if _, ok := syncers[resourceTypeServiceAccountToken.Id]; ok {
+			t.Fatal("the token type must not be registered without the grant")
+		}
+		if _, ok := syncers[resourceTypeServiceAccount.Id].(*credentialServiceAccountBuilder); ok {
+			t.Fatal("issuance must not be advertised without the grant")
+		}
+	})
+
+	t.Run("the grant registers both the token type and issuance", func(t *testing.T) {
+		syncers := typesFor(t, true, nil)
+		if _, ok := syncers[resourceTypeServiceAccountToken.Id]; !ok {
+			t.Fatal("the grant must register the token type, which carries the revoke path")
+		}
+		if _, ok := syncers[resourceTypeServiceAccount.Id].(*credentialServiceAccountBuilder); !ok {
+			t.Fatal("the grant must advertise issuance for the service account type")
+		}
+	})
+
+	t.Run("a grant with the type out of the sync selection advertises nothing", func(t *testing.T) {
+		syncers := typesFor(t, true, []string{resourceTypeUser.Id})
+		if _, ok := syncers[resourceTypeServiceAccountToken.Id]; ok {
+			t.Fatal("a type outside the sync selection must not be registered")
+		}
+		if _, ok := syncers[resourceTypeServiceAccount.Id].(*credentialServiceAccountBuilder); ok {
+			t.Fatal("issuance must not be advertised when the credential's landing type is not synced")
+		}
+	})
+}
+
+func TestIssueFailsClearlyWhenTheProviderRefusesTheLifetime(t *testing.T) {
+	fixture := &tokenFixture{
+		createStatus: http.StatusBadRequest,
+		createBody:   map[string]any{"message": "Number of seconds before expiration is greater than the global limit"},
+	}
+	builder := newCredentialServiceAccountBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)), false)
+
+	_, err := builder.Issue(context.Background(), tokenTestInput("7", "ticket-1"))
+	if err == nil {
+		t.Fatal("a provider rejection must fail the issuance")
+	}
+	if status.Code(err) == codes.AlreadyExists {
+		t.Fatal("a lifetime rejection is not a duplicate")
+	}
+	if !errors.Is(err, grafana.ErrServiceAccountTokenAlreadyExists) && !strings.Contains(err.Error(), "global limit") {
+		t.Fatalf("the provider's reason should survive, got %v", err)
+	}
+}

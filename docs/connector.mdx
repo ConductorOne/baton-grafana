@@ -15,8 +15,11 @@ sidebarTitle: "Grafana"
 | Teams | <Icon icon="square-check" iconType="solid" color="#c937ae"/> | <Icon icon="square-check" iconType="solid" color="#c937ae"/> |
 | Roles | <Icon icon="square-check" iconType="solid" color="#c937ae"/> | |
 | Service accounts | <Icon icon="square-check" iconType="solid" color="#c937ae"/> | |
+| Service account tokens | <Icon icon="square-check" iconType="solid" color="#c937ae"/> | |
 
 Team membership can be granted and revoked. Grafana RBAC roles that a team holds (IRM and OnCall plugin roles such as **Schedules Editor**) are synced as read-only assignments and require Grafana Cloud or Enterprise. Service accounts are synced with their organization role; they are read-only.
+
+Service account tokens are synced only when you enable **Sync service account tokens** (see [Credential vending](#credential-vending)) — they are what C1 issues and revokes when it vends a Grafana credential.
 
 [This connector syncs non-human identities](/product/admin/nhi) and displays them on the **Identities overview** dashboard.
 
@@ -80,6 +83,59 @@ Starting with connector version 0.2.3, each synced account's profile includes at
 
 * **Grafana Cloud** reads the organization users endpoint (`/api/org/users`), which always returns the flag, so `is_externally_synced` is present and mirrors Grafana's value exactly. It reflects **only** whether the user's organization role is managed by an external identity provider (role sync) — it is **not** derived from `auth_labels`, which is a different concept (how the user authenticated). In Grafana Cloud every user authenticates through grafana.com, so `auth_labels` is effectively always `grafana.com`; an admin whose role is managed locally therefore reports `is_externally_synced: false` even though their `auth_labels` show `grafana.com`.
 * **Self-hosted Grafana** reads the global users endpoint (`/api/users`), which does not return the flag. Rather than derive a value from a different concept, the connector omits `is_externally_synced` from the profile entirely. Use `auth_labels` to reason about authentication provenance in this mode.
+
+## Credential vending
+
+C1 can issue a **Grafana service account token** for a service account the connector has already synced, deliver it to the requester, and revoke it again. This is a credential-vending capability: the requester never handles Grafana credentials directly.
+
+The connector never creates a service account for a request. The subject of a vended credential is an existing synced service account, and the token inherits that account's permissions.
+
+### Enable it
+
+Two things must be true:
+
+1. Set **Sync service account tokens** (`--sync-service-account-tokens`, or `BATON_SYNC_SERVICE_ACCOUNT_TOKENS=true`) on the connector. Without it the connector does not sync tokens, does not advertise the credential kind, and does not offer a revoke path.
+2. Select the **Service Account Token** resource type in the connector's sync selection in C1. The type is opt-in: it is not synced by default, and the credential offering only appears once the type that carries the issued token is actually synced.
+
+### Permissions
+
+Credential vending needs two Grafana RBAC actions, both scoped to the service account (`serviceaccounts:id:*`):
+
+| Permission | Needed for |
+| :--- | :--- |
+| `serviceaccounts:read` | Listing a service account's tokens, on every sync and on the retry check before an issuance |
+| `serviceaccounts:write` | Creating a token when a request is approved, and deleting it when the credential is revoked or expires |
+
+`serviceaccounts:read` is already required for service account sync. `serviceaccounts:write` is only needed once you enable **Sync service account tokens** — an install that never enables it needs neither token endpoint nor this permission.
+
+### Routes
+
+The connector uses Grafana's legacy `/api` routes, which remain fully supported:
+
+| Operation | Method and path |
+| :--- | :--- |
+| List a service account's tokens | `GET /api/serviceaccounts/{id}/tokens` |
+| Create a token | `POST /api/serviceaccounts/{id}/tokens` |
+| Delete a token | `DELETE /api/serviceaccounts/{id}/tokens/{tokenId}` |
+
+Grafana 13 deprecates the legacy `/api` tree in favor of `/apis`, but the service-account token routes have no `/apis` equivalent yet and the legacy routes are not being disabled.
+
+### Token lifetime
+
+The create call sends `secondsToLive` in **seconds**, from the duration approved on the request:
+
+* Grafana reads `secondsToLive: 0` as **never expires**. The connector never sends 0: a request that reaches it without an approved duration is minted with a 24-hour lifetime instead, and the issued credential reports that expiry.
+* The shortest lifetime the connector accepts is **one minute**. A shorter or already-passed deadline fails the request with a clear error rather than minting a token with a different lifetime.
+* The requested duration is rounded **down** to whole seconds, so the token's expiry is never later than the deadline C1 recorded.
+* Grafana owns this credential's clock, so C1 clears the delivery copy when the token expires and does **not** queue a provider deletion for it. Revoking the request before then deletes the token at Grafana immediately.
+
+A Grafana instance can additionally cap token lifetimes with `api_key_max_seconds_to_live` or `service_accounts.token_expiration_day_limit`. When it does, the create call is rejected with Grafana's own message and the request fails rather than being retried with a different lifetime.
+
+### Duplicate and revocation behavior
+
+* Every token the connector issues is named after the C1 request (`c1-<request-id>`), so a retried request finds the token its predecessor created instead of minting a second one. Grafana token names are unique per organization, so the create call itself rejects a duplicate.
+* Deleting a token that is already gone at Grafana is treated as a **successful** deletion. Only a provider failure that leaves the token in place is reported as a failure.
+* Grafana does not document a per-service-account token limit, so there is no provider quota to exhaust when issuing tokens.
 
 ## Gather Grafana credentials
 

@@ -1,5 +1,7 @@
 package grafana
 
+import "time"
+
 // GrafanaError represents an error response from the Grafana API.
 type GrafanaError struct {
 	ErrorMessage string `json:"message"`
@@ -176,3 +178,45 @@ type Role struct {
 // a JSON array. Some mocks redirect the list path into a role-detail wrapper
 // object ({"permissions":[]}); treat that as an empty catalog.
 type rolesListResponse []*Role
+
+// ServiceAccountToken is one Grafana service-account token from
+// GET /api/serviceaccounts/:id/tokens. Grafana never returns the token value
+// after creation, so this carries only the metadata that identifies and
+// describes the credential.
+type ServiceAccountToken struct {
+	ID int64 `json:"id"`
+	// Name is the operator-visible token name. The connector names every token
+	// it issues after the C1 request id, which is what makes a retried issuance
+	// detectable instead of duplicable.
+	Name string `json:"name"`
+	// Created and LastUsedAt are RFC 3339 timestamps; Grafana omits or nulls
+	// LastUsedAt for a token that has never been used.
+	Created    *time.Time `json:"created"`
+	LastUsedAt *time.Time `json:"lastUsedAt"`
+	// Expiration is the absolute provider expiry, or nil for a token that never
+	// expires. This is the field to trust: the sibling secondsUntilExpiration
+	// is reported as 0 for any token whose expiry is more than seven days out.
+	Expiration *time.Time `json:"expiration"`
+	HasExpired bool       `json:"hasExpired"`
+	// IsRevoked is a pointer because Grafana only began reporting it recently;
+	// nil means "the server did not say", not "not revoked".
+	IsRevoked *bool `json:"isRevoked"`
+}
+
+// CreateServiceAccountTokenRequest is the body for
+// POST /api/serviceaccounts/:id/tokens. SecondsToLive is an int64 on purpose:
+// Grafana reads 0 as "never expires" and any negative value as an invalid
+// expiration, so the caller must always pass a positive number of seconds.
+type CreateServiceAccountTokenRequest struct {
+	Name          string `json:"name"`
+	SecondsToLive int64  `json:"secondsToLive"`
+}
+
+// CreatedServiceAccountToken is the one-time response from
+// POST /api/serviceaccounts/:id/tokens. Key is the plaintext token value and
+// Grafana returns it exactly once, on this response.
+type CreatedServiceAccountToken struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	Key  string `json:"key"`
+}
