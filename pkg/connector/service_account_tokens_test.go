@@ -58,6 +58,14 @@ type tokenFixture struct {
 	deleteBody   map[string]any
 	// tokenListStatus overrides the token list response status (0 means 200).
 	tokenListStatus int
+	// mintedNames, when non-nil, models the api_key table's real
+	// UNIQUE (org_id, name) index: a create whose name is already present fails
+	// the way the store's INSERT would.
+	mintedNames map[string]bool
+	// arrived and release form a barrier so a concurrency test's creates both
+	// reach the provider before either is answered.
+	arrived chan struct{}
+	release chan struct{}
 
 	requests []recordedRequest
 }
@@ -68,10 +76,10 @@ type recordedRequest struct {
 	body   map[string]any
 }
 
-func (f *tokenFixture) record(r *http.Request) {
+func (f *tokenFixture) record(r *http.Request) map[string]any {
 	rec := recordedRequest{method: r.Method, path: r.URL.Path}
+	var body map[string]any
 	if r.Body != nil {
-		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err == nil {
 			rec.body = body
 		}
@@ -79,6 +87,7 @@ func (f *tokenFixture) record(r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.requests = append(f.requests, rec)
+	return body
 }
 
 func (f *tokenFixture) recorded() []recordedRequest {
@@ -109,7 +118,7 @@ func (f *tokenFixture) countMethodPath(method, path string) int {
 
 func (f *tokenFixture) handler() http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		f.record(r)
+		body := f.record(r)
 
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/api/serviceaccounts/search":
@@ -117,7 +126,8 @@ func (f *tokenFixture) handler() http.HandlerFunc {
 		case r.Method == http.MethodGet && strings.HasSuffix(r.URL.Path, "/tokens"):
 			f.writeTokenList(w, r)
 		case r.Method == http.MethodPost && strings.HasSuffix(r.URL.Path, "/tokens"):
-			f.writeCreatedToken(w)
+			name, _ := body["name"].(string)
+			f.writeCreatedToken(w, name)
 		case r.Method == http.MethodDelete && strings.Contains(r.URL.Path, "/tokens/"):
 			f.writeDeleteResult(w)
 		default:
@@ -212,10 +222,33 @@ func writeTokens(w http.ResponseWriter, tokens []*grafana.ServiceAccountToken) {
 	writeJSON(w, http.StatusOK, tokens)
 }
 
-func (f *tokenFixture) writeCreatedToken(w http.ResponseWriter) {
+func (f *tokenFixture) writeCreatedToken(w http.ResponseWriter, name string) {
+	if f.arrived != nil {
+		f.arrived <- struct{}{}
+		// Bounded: a test that never closes the gate must not wedge the
+		// provider, and one issuance may legitimately never reach the create.
+		select {
+		case <-f.release:
+		case <-time.After(2 * time.Second):
+		}
+	}
+
 	f.mu.Lock()
 	f.created = true
+	duplicate := false
+	if f.mintedNames != nil && name != "" {
+		duplicate = f.mintedNames[name]
+		f.mintedNames[name] = true
+	}
 	f.mu.Unlock()
+
+	if duplicate {
+		// The real store's INSERT violates UNIQUE (org_id, name) and the API
+		// renders the raw database error as HTTP 500 -- not the friendly 400 a
+		// sequential duplicate gets.
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"message": "failed to add service account token"})
+		return
+	}
 
 	if f.createStatus != 0 {
 		body := f.createBody
@@ -779,6 +812,101 @@ func TestIssueClassifiesOnlyARealNameConflictAsDuplicate(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "global limit") {
 		t.Fatalf("the provider's reason should survive, got %v", err)
+	}
+}
+
+// TestConcurrentIssuanceLeavesExactlyOneCredential drives two issuances for the
+// same request at the same time, both released only after both have reached the
+// provider's create. The pre-check is therefore stale for both, which is exactly
+// the race a list-before-create cannot close.
+//
+// What keeps it safe is the provider's own storage: the api_key table carries a
+// real UNIQUE (org_id, name) index
+// (pkg/services/sqlstore/migrations/apikey_mig.go), so the second INSERT cannot
+// commit. The fixture models that, and the assertions are that exactly one
+// credential is minted and that the loser never revokes the winner's.
+func TestConcurrentIssuanceLeavesExactlyOneCredential(t *testing.T) {
+	providerExpiry := time.Now().UTC().Add(time.Hour).Truncate(time.Second)
+	fixture := &tokenFixture{
+		mintedNames:       map[string]bool{},
+		arrived:           make(chan struct{}, 2),
+		release:           make(chan struct{}),
+		createdExpiration: &providerExpiry,
+	}
+	// Deliberately the caching client, not the uncached one: two concurrent
+	// requests through a client whose cache is the SDK's noop cache race on that
+	// cache's unsynchronized counter (uhttp.(*NoopCache).Get), which is an SDK
+	// defect this test would otherwise report as its own. The memory cache is
+	// synchronized, and a shared empty pre-check is exactly the race under test.
+	builder := newCredentialServiceAccountBuilder(newCloudClientForTest(t, newTokenFixtureServer(t, fixture)), false)
+
+	type result struct {
+		out *connectorbuilder.CredentialIssueOutput
+		err error
+	}
+	results := make(chan result, 2)
+	for range 2 {
+		go func() {
+			out, err := builder.Issue(context.Background(), tokenTestInput("7", "ticket-1"))
+			results <- result{out: out, err: err}
+		}()
+	}
+
+	// Hold the creates until both have arrived, so neither issuance can win by
+	// being scheduled first. Bounded, because one issuance may legitimately be
+	// caught by its pre-check before it reaches the provider at all.
+	go func() {
+		for range 2 {
+			select {
+			case <-fixture.arrived:
+			case <-time.After(500 * time.Millisecond):
+			}
+		}
+		close(fixture.release)
+	}()
+
+	// Exactly one issuance may succeed, whichever way the race falls: the loser
+	// is caught either by its own pre-check (the provider's named conflict) or
+	// by the store's unique index (the raw insert failure). Both are failures,
+	// and neither may take the winner's credential with it.
+	var succeeded, failed int
+	for range 2 {
+		res := <-results
+		switch {
+		case res.err == nil:
+			succeeded++
+			if res.out.Secret.GetId().GetResource() != "7.41" {
+				t.Fatalf("unexpected handle %q", res.out.Secret.GetId().GetResource())
+			}
+		default:
+			failed++
+			if status.Code(res.err) == codes.AlreadyExists {
+				// The loser's own pre-check saw the winner's token: the fast path
+				// worked and the provider was never asked to mint a duplicate.
+				continue
+			}
+			// Otherwise the store's unique index rejected the INSERT, which the
+			// API renders as its raw insert failure rather than the named
+			// conflict. The connector does not reclassify that as a duplicate --
+			// the text is database-specific -- so the caller sees the provider's
+			// failure, which is what this asserts.
+			if !strings.Contains(res.err.Error(), "failed to add service account token") {
+				t.Fatalf("expected the provider's named name conflict or its raw insert failure, got %v", res.err)
+			}
+		}
+	}
+	if succeeded != 1 || failed != 1 {
+		t.Fatalf("expected exactly one issuance to succeed, got %d succeeded and %d failed", succeeded, failed)
+	}
+
+	fixture.mu.Lock()
+	minted := len(fixture.mintedNames)
+	fixture.mu.Unlock()
+	if minted != 1 {
+		t.Fatalf("expected exactly one provider credential to be minted, got %d", minted)
+	}
+	if n := fixture.countMethod(http.MethodDelete); n != 0 {
+		t.Fatalf("the losing issuance must never revoke the winner's credential, got %d deletes: %+v", n, fixture.recorded())
 	}
 }
 

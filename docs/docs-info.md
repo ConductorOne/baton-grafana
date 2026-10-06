@@ -235,13 +235,26 @@ Design notes:
   then live and the connector holds its only handle. Cleanup is bounded by a
   30-second timeout detached from the caller's context.
 * Token names are `c1-<request id>`, and Grafana enforces uniqueness per
-  organization. The pre-issuance duplicate lookup is a fast path only: the SDK's
-  HTTP client caches GET responses for an hour, so a retry inside that window
-  can read a stale token list, and a list-before-create is not atomic against a
-  concurrent create either. The provider's own name-uniqueness rejection is the
-  guard; it is classified as a duplicate **only** when Grafana names that
-  conflict ("already exists in the organization"), so an unrelated 400 is never
-  reported as one. A duplicate never revokes the credential that already exists.
+  organization with a **real database constraint**, not just a lookup:
+  `pkg/services/sqlstore/migrations/apikey_mig.go` creates the `api_key` table
+  with a `UNIQUE (org_id, name)` index. Two concurrent creates of one name
+  therefore cannot both commit.
+* That gives two provider answers for the same situation. Sequentially,
+  `AddAPIKey` sees the existing row and returns `apikey.ErrDuplicate`, which the
+  API renders as HTTP 400 with "service account token with given name already
+  exists in the organization" — the message the connector classifies as a
+  duplicate. Concurrently, the loser's `INSERT` violates the unique index and the
+  API renders the raw database error as HTTP 500 ("failed to add service account
+  token"); the connector deliberately does **not** reclassify that as a duplicate,
+  because the error text is database-specific and calling an arbitrary 500 a
+  duplicate would tell the caller a credential exists when it does not. The
+  caller sees the provider's failure either way, and the database leaves exactly
+  one credential in place.
+* The pre-issuance duplicate lookup is a fast path only: the SDK's HTTP client
+  caches GET responses for an hour, so a retry inside that window can read a
+  stale token list, and a list-before-create is not atomic against a concurrent
+  create either. The provider's own constraint is the guard. A duplicate never
+  revokes the credential that already exists.
 * A create whose response is lost after Grafana committed it is reported as a
   failure, not retried and not removed: the connector cannot know whether a
   token exists. The token, if it exists, is named `c1-<request id>`, so the next

@@ -583,15 +583,29 @@ func (c *Client) listServiceAccountTokens(ctx context.Context, serviceAccountID 
 // treats 0 as "never expires" and any negative value as an invalid expiration,
 // so this method never lets a caller fall through to a non-expiring token.
 //
-// A rejected name maps to ErrServiceAccountTokenAlreadyExists. The classification
-// is deliberately narrow: Grafana scopes token-name uniqueness to the
-// organization (the api_key store looks up by org_id + name and returns
-// apikey.ErrDuplicate, which the service-account API renders as
-// serviceaccounts.ErrDuplicateToken with the public message "service account
-// token with given name already exists in the organization"). Only that message
-// is treated as a name conflict — a 400 for any other reason, including an
-// invalid lifetime, stays a plain error, because reporting it as a duplicate
-// would tell the caller a credential exists when none does.
+// A rejected name maps to ErrServiceAccountTokenAlreadyExists, and the
+// classification is deliberately narrow: Grafana scopes token-name uniqueness to
+// the organization, and only the conflict it names that way is treated as a
+// duplicate.
+//
+// The uniqueness is a real database constraint, not merely a lookup.
+// `pkg/services/sqlstore/migrations/apikey_mig.go` creates the `api_key` table
+// with `{Cols: ["org_id", "name"], Type: UniqueIndex}`, so two concurrent creates
+// of one name cannot both commit.
+//
+// That gives two different provider answers for the same situation:
+//
+//   - Sequentially, `AddAPIKey` sees the existing row and returns
+//     `apikey.ErrDuplicate`, which the service-account API renders as HTTP 400
+//     with "service account token with given name already exists in the
+//     organization". That is the message matched here.
+//   - Concurrently, the loser's INSERT violates the unique index and
+//     `AddAPIKey` wraps the raw database error as "failed to insert token",
+//     which the API renders as HTTP 500. It is deliberately NOT reclassified as
+//     a duplicate: the error text is database-specific, and calling an arbitrary
+//     500 a duplicate would tell the caller a credential exists when it does not.
+//     The caller sees the provider's failure, and the database has still left
+//     exactly one credential in place.
 func (c *Client) CreateServiceAccountToken(ctx context.Context, serviceAccountID int, name string, secondsToLive int64) (*CreatedServiceAccountToken, annotations.Annotations, error) {
 	var created CreatedServiceAccountToken
 	annos, err := c.doRequest(
