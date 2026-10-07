@@ -617,11 +617,9 @@ func (c *Client) CreateServiceAccountToken(ctx context.Context, serviceAccountID
 		nil,
 	)
 	if err != nil {
-		switch status.Code(err) {
-		case codes.InvalidArgument, codes.AlreadyExists:
-			if strings.Contains(strings.ToLower(err.Error()), "already exists in the organization") {
-				return nil, annos, fmt.Errorf("%w: %w", ErrServiceAccountTokenAlreadyExists, err)
-			}
+		if code := status.Code(err); (code == codes.InvalidArgument || code == codes.AlreadyExists) &&
+			strings.Contains(strings.ToLower(err.Error()), "already exists in the organization") {
+			return nil, annos, fmt.Errorf("%w: %w", ErrServiceAccountTokenAlreadyExists, err)
 		}
 		return nil, annos, fmt.Errorf("grafana-client: create service account token: %w", err)
 	}

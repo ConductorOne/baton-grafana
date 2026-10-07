@@ -41,9 +41,9 @@ const (
 	// favour of /apis, but the service-account token routes have no /apis
 	// equivalent yet and the legacy routes remain fully supported, so these
 	// stay on /api. See docs/connector.mdx.
-	ListServiceAccountTokensPath  = "/api/serviceaccounts/%d/tokens"
-	CreateServiceAccountTokenPath = "/api/serviceaccounts/%d/tokens"
-	DeleteServiceAccountTokenPath = "/api/serviceaccounts/%d/tokens/%d"
+	ListServiceAccountTokensPath  = "/api/serviceaccounts/%d/tokens"    //nolint:gosec // Not a credential: a URL path template.
+	CreateServiceAccountTokenPath = "/api/serviceaccounts/%d/tokens"    //nolint:gosec // Not a credential: a URL path template.
+	DeleteServiceAccountTokenPath = "/api/serviceaccounts/%d/tokens/%d" //nolint:gosec // Not a credential: a URL path template.
 
 	// RBAC (Cloud / Enterprise).
 	AccessControlRolesPath = "/api/access-control/roles"

@@ -92,7 +92,11 @@ const (
 	// so a provider that ignores page/perpage and keeps returning full pages
 	// fails closed instead of paging forever. 10_000 pages at the connector's
 	// page size is far beyond any real Grafana instance's service-account count.
-	maxServiceAccountPages = int64(10_000)
+	//
+	// uint64 because it is compared against the page number the pagination bag
+	// carries, which is uint64: converting the page down to int64 to compare
+	// would be a narrowing conversion on a value that can be arbitrarily large.
+	maxServiceAccountPages = uint64(10_000)
 )
 
 var (
@@ -158,7 +162,7 @@ func (t *serviceAccountTokenBuilder) List(ctx context.Context, _ *v2.ResourceId,
 // state for every account on it. It returns no resources of its own: the tokens
 // are produced by those child states on subsequent calls.
 func (t *serviceAccountTokenBuilder) listServiceAccountsPage(ctx context.Context, bag *pagination.Bag, page uint64) ([]*v2.Resource, *rs.SyncOpResults, error) {
-	if int64(page) >= maxServiceAccountPages {
+	if page >= maxServiceAccountPages {
 		return nil, nil, fmt.Errorf(
 			"grafana-connector: exceeded %d service-account pages while syncing service-account tokens",
 			maxServiceAccountPages)
@@ -636,9 +640,6 @@ func serviceAccountTokenResource(parent *v2.ResourceId, token *grafana.ServiceAc
 		rs.WithSecretType(v2.SecretTrait_CREDENTIAL_TYPE_STATIC_SECRET),
 		rs.WithSecretDetail(serviceAccountTokenDetail),
 	}
-	if token.Created != nil {
-		traitOpts = append(traitOpts, rs.WithSecretCreatedAt(*token.Created))
-	}
 	if token.LastUsedAt != nil {
 		traitOpts = append(traitOpts, rs.WithSecretLastUsedAt(*token.LastUsedAt))
 	}
@@ -649,12 +650,20 @@ func serviceAccountTokenResource(parent *v2.ResourceId, token *grafana.ServiceAc
 		traitOpts = append(traitOpts, rs.WithSecretExpiresAt(*token.Expiration))
 	}
 
+	// created_at lives on the resource, not the trait: WithSecretCreatedAt is
+	// deprecated in favour of WithResourceCreatedAt, which sets the same field
+	// the SDK populates for a resource built with NewSecretResource.
+	resourceOpts := []rs.ResourceOption{rs.WithParentResourceID(parent)}
+	if token.Created != nil {
+		resourceOpts = append(resourceOpts, rs.WithResourceCreatedAt(*token.Created))
+	}
+
 	return rs.NewSecretResource(
 		serviceAccountTokenDisplayName(token),
 		resourceTypeServiceAccountToken,
 		serviceAccountTokenHandle(parent.GetResource(), token.ID),
 		traitOpts,
-		rs.WithParentResourceID(parent),
+		resourceOpts...,
 	)
 }
 

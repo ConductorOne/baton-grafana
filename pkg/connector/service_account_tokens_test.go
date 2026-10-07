@@ -712,7 +712,7 @@ func TestIssueRejectsWhenTheProviderDoesNotReportTheTokenItMinted(t *testing.T) 
 }
 
 func TestIssueRejectsAnUndecodableProviderExpiry(t *testing.T) {
-	fixture := &tokenFixture{tokenListBodyAfterCreate: `[{"id":41,"name":"c1-ticket-1","expiration":"not-a-timestamp"}]`}
+	fixture := &tokenFixture{tokenListBodyAfterCreate: `[{"id":41,"name":"c1-ticket-1","expiration":"not-a-timestamp"}]`} //nolint:gosec // Not a credential: a synthetic provider response body.
 	builder := newCredentialServiceAccountBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)), false)
 
 	if _, err := builder.Issue(context.Background(), tokenTestInput("7", "ticket-1")); err == nil {
@@ -872,27 +872,26 @@ func TestConcurrentIssuanceLeavesExactlyOneCredential(t *testing.T) {
 	var succeeded, failed int
 	for range 2 {
 		res := <-results
-		switch {
-		case res.err == nil:
+		if res.err == nil {
 			succeeded++
 			if res.out.Secret.GetId().GetResource() != "7.41" {
 				t.Fatalf("unexpected handle %q", res.out.Secret.GetId().GetResource())
 			}
-		default:
-			failed++
-			if status.Code(res.err) == codes.AlreadyExists {
-				// The loser's own pre-check saw the winner's token: the fast path
-				// worked and the provider was never asked to mint a duplicate.
-				continue
-			}
-			// Otherwise the store's unique index rejected the INSERT, which the
-			// API renders as its raw insert failure rather than the named
-			// conflict. The connector does not reclassify that as a duplicate --
-			// the text is database-specific -- so the caller sees the provider's
-			// failure, which is what this asserts.
-			if !strings.Contains(res.err.Error(), "failed to add service account token") {
-				t.Fatalf("expected the provider's named name conflict or its raw insert failure, got %v", res.err)
-			}
+			continue
+		}
+		failed++
+		if status.Code(res.err) == codes.AlreadyExists {
+			// The loser's own pre-check saw the winner's token: the fast path
+			// worked and the provider was never asked to mint a duplicate.
+			continue
+		}
+		// Otherwise the store's unique index rejected the INSERT, which the API
+		// renders as its raw insert failure rather than the named conflict. The
+		// connector does not reclassify that as a duplicate -- the text is
+		// database-specific -- so the caller sees the provider's failure, which
+		// is what this asserts.
+		if !strings.Contains(res.err.Error(), "failed to add service account token") {
+			t.Fatalf("expected the provider's named name conflict or its raw insert failure, got %v", res.err)
 		}
 	}
 	if succeeded != 1 || failed != 1 {
