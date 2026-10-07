@@ -213,6 +213,20 @@ Design notes:
   because Grafana's delete is scoped to both and neither id is derivable from
   the other. Both travel in the resource id rather than relying on the optional
   `parentResourceID` hint.
+* The delivered value is the native `api_key_v2` document, not the bare token:
+  `PlaintextData.Schema` is `api_key_v2` and the bytes are
+  `{"key_value","provider","base_url","key_id","header_name","expires_at"}`,
+  in the profile's declaration order with the empty optionals omitted. The
+  identifier, the codec (`JsonV1`), the required `key_value` and the optional
+  field set come from the shipped client catalog (`ductone/multipass`,
+  `crates/latchkey-client-sdk/src/secret_types/definitions.rs`). `scopes` is
+  never emitted — a Grafana token inherits its service account's permissions and
+  cannot be scoped. `expires_at` is a date, the profile's own granularity; the
+  exact provider instant stays on the resource's `SecretTrait`, which is what was
+  verified against the approved deadline. The provider token id also appears in
+  the document as `key_id`, but the revocation handle above remains the
+  authority and is not derived from these bytes. The encoder writes the document
+  with HTML escaping off so the bytes match the profile's canonical form.
 * The descriptor declares an `IssuanceExpiryCapability`, which is what makes C1
   treat Grafana as the owner of the credential's clock and forward the approved
   duration as `secondsToLive`. A token minted without a forwarded deadline takes

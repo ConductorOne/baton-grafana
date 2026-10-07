@@ -132,6 +132,20 @@ The create call sends `secondsToLive` in **seconds**, derived from the duration 
 
 The advertised minimum is the only lifetime bound the connector enforces itself. A Grafana instance can additionally cap token lifetimes with `api_key_max_seconds_to_live` or `service_accounts.token_expiration_day_limit`, but that ceiling is instance configuration and is not readable through the API, so the connector does not advertise or enforce one — Grafana's own rejection is surfaced instead.
 
+### Vended credential value
+
+An issued credential is delivered as the native **`api_key_v2`** document — the profile C1's vault stores a typed API key as — rather than as a bare token string:
+
+```json
+{"key_value":"<the one-time token>","provider":"grafana","base_url":"<your Grafana instance>","key_id":"<provider token id>","header_name":"Authorization","expires_at":"YYYY-MM-DD"}
+```
+
+* `key_value` is the one-time token value. Grafana returns it exactly once, on the create response, and never again.
+* `base_url` is the instance the connector is configured against, and `header_name` is the header the token is presented in (`Authorization: Bearer <token>`), so the credential is usable without out-of-band knowledge of Grafana's convention.
+* `expires_at` is the provider's reported expiry as a **date**, which is the granularity the profile declares. The exact instant stays on the credential's expiry, which is the value the connector verified against the approved deadline.
+* `scopes` is never present: a Grafana service-account token inherits its service account's permissions and cannot be scoped.
+* The provider token id stays the credential's revocation handle, which is what a revoke acts on. It is reported in the document as `key_id` for reference but is not derived from it.
+
 ### Duplicate and revocation behavior
 
 * Every token the connector issues is named after the C1 request (`c1-<request-id>`), so a retried request finds the token its predecessor created instead of minting a second one. Grafana token names are unique per organization, so the create call itself rejects a duplicate — and the connector classifies a rejection as a duplicate only when Grafana names that specific conflict, so an unrelated bad request is never reported as one. A duplicate is never resolved by revoking the credential that already exists.
