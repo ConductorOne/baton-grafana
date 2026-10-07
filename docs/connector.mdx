@@ -134,15 +134,18 @@ The advertised minimum is the only lifetime bound the connector enforces itself.
 
 ### Vended credential value
 
-An issued credential is delivered as the native **`api_key_v2`** document — the profile C1's vault stores a typed API key as — rather than as a bare token string:
+An issued credential is delivered as the **`api_key_v2`** document — the shape that profile defines — rather than as a bare token string:
 
 ```json
 {"key_value":"<the one-time token>","provider":"grafana","base_url":"<your Grafana instance>","key_id":"<provider token id>","header_name":"Authorization","expires_at":"YYYY-MM-DD"}
 ```
 
+The document is labelled with the profile's identifier in the delivered value's `schema` field. That label is a **hint from the producer, not a storage instruction**: it does not by itself make C1 store the value as `api_key_v2`. The value is stored as a typed credential only once a code-owned association between this connector and that profile is in place — until then it is delivered as opaque bytes, like any other plaintext. This connector emits the document and names the profile; it does not enable anything by itself.
+
 * `key_value` is the one-time token value. Grafana returns it exactly once, on the create response, and never again.
-* `base_url` is the instance the connector is configured against, and `header_name` is the header the token is presented in (`Authorization: Bearer <token>`), so the credential is usable without out-of-band knowledge of Grafana's convention.
-* `expires_at` is the provider's reported expiry as a **date**, which is the granularity the profile declares. The exact instant stays on the credential's expiry, which is the value the connector verified against the approved deadline.
+* `base_url` is the instance the connector is configured against.
+* `header_name` is the header the token is presented in. It carries the header **name** only; the scheme is the vendor's convention and is not encoded in the document. Present the token as `Authorization: Bearer <token>`.
+* `expires_at` is the provider's reported expiry as a **date**, which is the granularity the profile declares. The exact instant stays on the credential's expiry, which is the value the connector verified against the approved deadline. A credential with no expiry omits the field rather than writing a zero date.
 * `scopes` is never present: a Grafana service-account token inherits its service account's permissions and cannot be scoped.
 * The provider token id stays the credential's revocation handle, which is what a revoke acts on. It is reported in the document as `key_id` for reference but is not derived from it.
 

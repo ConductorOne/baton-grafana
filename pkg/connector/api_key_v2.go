@@ -63,17 +63,22 @@ type apiKeyV2Document struct {
 // this document and outside the plaintext.
 func apiKeyV2Value(keyValue, keyID, baseURL string, expiresAt time.Time) ([]byte, error) {
 	document := apiKeyV2Document{
-		KeyValue: keyValue,
-		Provider: apiKeyV2Provider,
-		BaseURL:  baseURL,
-		KeyID:    keyID,
-		// The profile's `expires_at` is a date — an RFC 3339 full-date of at
-		// most ten characters — not a timestamp. The exact instant the provider
-		// reported stays on the resource's SecretTrait, which is the value the
-		// connector verifies against the approved deadline; this field is the
-		// profile's own granularity and is truncated to the UTC day.
-		ExpiresAt:  expiresAt.UTC().Format(time.DateOnly),
+		KeyValue:   keyValue,
+		Provider:   apiKeyV2Provider,
+		BaseURL:    baseURL,
+		KeyID:      keyID,
 		HeaderName: apiKeyV2HeaderName,
+	}
+	// The profile's `expires_at` is a date — an RFC 3339 full-date of at most
+	// ten characters — not a timestamp, and the profile omits an empty optional
+	// rather than writing a zero value into it. A caller with no expiry must
+	// therefore produce no `expires_at` at all: formatting a zero `time.Time`
+	// would emit "0001-01-01", which is a date the profile never sanctioned and
+	// which a reader would take for a real deadline. The issuance path always
+	// has the provider's own expiry, which is the value verified against the
+	// approved deadline; this branch is the empty case.
+	if !expiresAt.IsZero() {
+		document.ExpiresAt = expiresAt.UTC().Format(time.DateOnly)
 	}
 
 	// Not json.Marshal: an Encoder with HTML escaping off writes the token and

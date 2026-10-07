@@ -104,7 +104,9 @@ func TestAPIKeyV2ValueEmitsOnlyDeclaredStringFields(t *testing.T) {
 
 // An optional field with no value is omitted rather than written as an empty
 // string, which is how the profile's own encoder renders it. `expires_at` is
-// asserted alongside it because a zero time must not become "0001-01-01".
+// asserted alongside the rest: a zero time must produce no field at all, not
+// the "0001-01-01" a naive formatting would write, because a reader would take
+// that for a real deadline.
 func TestAPIKeyV2ValueOmitsEmptyOptionals(t *testing.T) {
 	value, err := apiKeyV2Value("glsa_one_time_value", "", "", time.Time{})
 	if err != nil {
@@ -115,7 +117,7 @@ func TestAPIKeyV2ValueOmitsEmptyOptionals(t *testing.T) {
 	if err := json.Unmarshal(value, &decoded); err != nil {
 		t.Fatalf("the document must be a JSON object: %v", err)
 	}
-	for _, key := range []string{"base_url", "key_id"} {
+	for _, key := range []string{"base_url", "key_id", "expires_at"} {
 		if _, present := decoded[key]; present {
 			t.Errorf("an empty %s must be omitted, got %s", key, value)
 		}
@@ -123,8 +125,8 @@ func TestAPIKeyV2ValueOmitsEmptyOptionals(t *testing.T) {
 	if got := decoded["key_value"]; got != "glsa_one_time_value" {
 		t.Fatalf("unexpected key_value %v", got)
 	}
-	if got := decoded["expires_at"]; got != "0001-01-01" {
-		t.Fatalf("a zero expiry is still written as its own date, got %v", got)
+	if strings.Contains(string(value), "0001-01-01") {
+		t.Fatalf("a zero expiry must not be written as a date, got %s", value)
 	}
 }
 
