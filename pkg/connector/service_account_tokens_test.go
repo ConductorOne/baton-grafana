@@ -1174,6 +1174,64 @@ func TestListPaginatesTheServiceAccountLevel(t *testing.T) {
 	}
 }
 
+// TestListRefusesACapSizedTokenResponse covers the provider's own limit:
+// Grafana answers the token list with a SQL LIMIT and no pagination
+// (maxRetrievedTokens = 1000), so a response at the cap may be a prefix. A
+// truncated list reported as complete would make C1 read the missing tokens as
+// deleted, so the sync must fail closed instead.
+func TestListRefusesACapSizedTokenResponse(t *testing.T) {
+	tokensAt := func(n int) []*grafana.ServiceAccountToken {
+		out := make([]*grafana.ServiceAccountToken, 0, n)
+		for i := range n {
+			out = append(out, &grafana.ServiceAccountToken{ID: int64(1000 + i), Name: fmt.Sprintf("token-%d", i)})
+		}
+		return out
+	}
+
+	for _, tc := range []struct {
+		name    string
+		count   int
+		wantErr bool
+	}{
+		{name: "one below the cap is a complete list", count: grafanaServiceAccountTokenResponseCap - 1},
+		{name: "the cap is refused as possibly truncated", count: grafanaServiceAccountTokenResponseCap, wantErr: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			fixture := &tokenFixture{
+				serviceAccounts: []*grafana.ServiceAccount{{ID: 7, Name: "sa-seven"}},
+				tokens:          map[int][]*grafana.ServiceAccountToken{7: tokensAt(tc.count)},
+			}
+			builder := newServiceAccountTokenBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)))
+
+			var err error
+			pageToken := ""
+			for range 5 {
+				_, results, listErr := builder.List(context.Background(), nil, syncAttrs(pageToken))
+				if listErr != nil {
+					err = listErr
+					break
+				}
+				pageToken = nextPageToken(results)
+				if pageToken == "" {
+					break
+				}
+			}
+			if tc.wantErr {
+				if err == nil {
+					t.Fatalf("a %d-token response must fail the sync rather than report a complete list", tc.count)
+				}
+				if !strings.Contains(err.Error(), "per-response cap") {
+					t.Fatalf("the failure should name the provider cap, got %v", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("a %d-token response is complete and must sync: %v", tc.count, err)
+			}
+		})
+	}
+}
+
 func TestListFailsClosedWhenTokensCannotBeRead(t *testing.T) {
 	fixture := &tokenFixture{
 		serviceAccounts: []*grafana.ServiceAccount{{ID: 7, Name: "sa-seven"}},

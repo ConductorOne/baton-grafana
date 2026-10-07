@@ -77,6 +77,17 @@ const (
 	// is already done.
 	serviceAccountTokenCleanupTimeout = 30 * time.Second
 
+	// grafanaServiceAccountTokenResponseCap is the most tokens Grafana's token
+	// store returns in one response. It is a SQL LIMIT with no pagination
+	// (`pkg/services/serviceaccounts/database/token_store.go`, maxRetrievedTokens
+	// = 1000, ordered by token name), so a cap-sized response may be truncated.
+	//
+	// A truncated list reported as complete would make C1 read the missing
+	// tokens as deleted and drop their revocation handles, so a cap-sized
+	// response fails the sync instead. This is a read refusal, not a quota: the
+	// connector does not invent a token limit.
+	grafanaServiceAccountTokenResponseCap = 1000
+
 	// maxServiceAccountPages bounds the service-account level of the token walk
 	// so a provider that ignores page/perpage and keeps returning full pages
 	// fails closed instead of paging forever. 10_000 pages at the connector's
@@ -211,6 +222,17 @@ func (t *serviceAccountTokenBuilder) listTokensForServiceAccount(ctx context.Con
 				serviceAccountID, err)
 		}
 		return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf("grafana-connector: failed to list tokens for service account %q: %w", serviceAccountID, err)
+	}
+
+	if len(tokens) >= grafanaServiceAccountTokenResponseCap {
+		// The provider answered with exactly its per-response cap. There is no
+		// pagination to walk, so this list may be a prefix of the account's
+		// tokens; reporting it as complete would let C1 treat the missing ones as
+		// deleted. Fail closed and say which limit was hit.
+		return nil, &rs.SyncOpResults{Annotations: annos}, fmt.Errorf(
+			"grafana-connector: service account %q returned %d tokens, the provider's per-response cap; "+
+				"the list cannot be reported as complete because Grafana caps this endpoint with a SQL LIMIT and no pagination",
+			serviceAccountID, len(tokens))
 	}
 
 	parent := &v2.ResourceId{ResourceType: resourceTypeServiceAccount.Id, Resource: serviceAccountID}

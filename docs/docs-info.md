@@ -267,6 +267,14 @@ Design notes:
   the API renders it as 404.
 * Grafana documents no per-service-account token limit, so there is no provider
   quota for the vending kit's `S-KEY-LIMIT` scenario to exercise.
+* **The token list has a hard per-response cap.** `ListTokens` applies a SQL
+  `LIMIT` of `maxRetrievedTokens` (1000) with no pagination
+  (`pkg/services/serviceaccounts/database/token_store.go`, ordered by token
+  name), so a response at the cap may be a prefix of the account's tokens. A
+  truncated list reported as complete would make C1 read the missing tokens as
+  deleted and drop their revocation handles, so the sync **fails closed** at the
+  cap with a message naming it. One below the cap syncs normally. This is a read
+  refusal, not a quota: the connector does not invent a token limit.
 
 ### Teams, RBAC roles, and service accounts
 
