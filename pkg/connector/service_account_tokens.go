@@ -464,10 +464,25 @@ func (b *credentialServiceAccountBuilder) Issue(ctx context.Context, input *conn
 			fmt.Errorf("baton-grafana: build service account token secret resource: %w", err))
 	}
 
+	// The delivered value is the native `api_key_v2` document rather than the
+	// bare token, so a consumer holding the credential knows which field is the
+	// key, which instance it is for and how it is presented. The provider token
+	// id appears in it as `key_id`; the resource's handle above stays the
+	// canonical revocation handle and is not derived from these bytes.
+	value, err := apiKeyV2Value(created.Key, strconv.FormatInt(created.ID, 10), b.client.BaseURL(), *providerExpiry)
+	if err != nil {
+		// Nothing that cannot be delivered may stay live at the provider.
+		return nil, b.failIssuedServiceAccountToken(ctx, serviceAccountID, created.ID, name, err)
+	}
+
 	return &connectorbuilder.CredentialIssueOutput{
 		Secret: secret,
 		PlaintextData: []*v2.PlaintextData{
-			v2.PlaintextData_builder{Name: serviceAccountTokenPlaintextName, Bytes: []byte(created.Key)}.Build(),
+			v2.PlaintextData_builder{
+				Name:   serviceAccountTokenPlaintextName,
+				Schema: apiKeyV2ContentType,
+				Bytes:  value,
+			}.Build(),
 		},
 		ResourceMode: v2.CredentialResourceMode_CREDENTIAL_RESOURCE_MODE_DISCOVERABLE,
 	}, nil

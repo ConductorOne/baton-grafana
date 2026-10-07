@@ -62,6 +62,16 @@ func (c *Client) IsCloud() bool {
 	return c.apiToken != ""
 }
 
+// BaseURL returns the Grafana instance URL the client was configured with.
+// It is what a vended credential reports as the instance its key is used
+// against, so it is the configured base and not a resolved request URL.
+func (c *Client) BaseURL() string {
+	if c.baseUrl == nil {
+		return ""
+	}
+	return c.baseUrl.String()
+}
+
 // buildResourceURL constructs an absolute URL by formatting a resource path
 // template (like "/api/orgs/%d/users") with optional parameters, then resolving it
 // against c.baseURL.

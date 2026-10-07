@@ -132,6 +132,23 @@ The create call sends `secondsToLive` in **seconds**, derived from the duration 
 
 The advertised minimum is the only lifetime bound the connector enforces itself. A Grafana instance can additionally cap token lifetimes with `api_key_max_seconds_to_live` or `service_accounts.token_expiration_day_limit`, but that ceiling is instance configuration and is not readable through the API, so the connector does not advertise or enforce one — Grafana's own rejection is surfaced instead.
 
+### Vended credential value
+
+An issued credential is delivered as the **`api_key_v2`** document — the shape that profile defines — rather than as a bare token string:
+
+```json
+{"key_value":"<the one-time token>","provider":"grafana","base_url":"<your Grafana instance>","key_id":"<provider token id>","header_name":"Authorization","expires_at":"YYYY-MM-DD"}
+```
+
+The document is labelled with the profile's identifier in the delivered value's `schema` field. That label is a **hint from the producer, not a storage instruction**: it does not by itself make C1 store the value as `api_key_v2`. The value is stored as a typed credential only once a code-owned association between this connector and that profile is in place — until then it is delivered as opaque bytes, like any other plaintext. This connector emits the document and names the profile; it does not enable anything by itself.
+
+* `key_value` is the one-time token value. Grafana returns it exactly once, on the create response, and never again.
+* `base_url` is the instance the connector is configured against.
+* `header_name` is the header the token is presented in. It carries the header **name** only; the scheme is the vendor's convention and is not encoded in the document. Present the token as `Authorization: Bearer <token>`.
+* `expires_at` is the provider's reported expiry as a **date**, which is the granularity the profile declares. The exact instant stays on the credential's expiry, which is the value the connector verified against the approved deadline. A credential with no expiry omits the field rather than writing a zero date.
+* `scopes` is never present: a Grafana service-account token inherits its service account's permissions and cannot be scoped.
+* The provider token id stays the credential's revocation handle, which is what a revoke acts on. It is reported in the document as `key_id` for reference but is not derived from it.
+
 ### Duplicate and revocation behavior
 
 * Every token the connector issues is named after the C1 request (`c1-<request-id>`), so a retried request finds the token its predecessor created instead of minting a second one. Grafana token names are unique per organization, so the create call itself rejects a duplicate — and the connector classifies a rejection as a duplicate only when Grafana names that specific conflict, so an unrelated bad request is never reported as one. A duplicate is never resolved by revoking the credential that already exists.

@@ -542,7 +542,8 @@ func TestCapabilitiesOmitTokenIssuanceWithoutTheGrant(t *testing.T) {
 func TestIssueReportsTheProvidersOwnExpiry(t *testing.T) {
 	providerExpiry := time.Now().UTC().Add(90 * time.Minute).Truncate(time.Second)
 	fixture := &tokenFixture{createdExpiration: &providerExpiry}
-	builder := newCredentialServiceAccountBuilder(newUncachedCloudClientForTest(t, newTokenFixtureServer(t, fixture)), false)
+	ts := newTokenFixtureServer(t, fixture)
+	builder := newCredentialServiceAccountBuilder(newUncachedCloudClientForTest(t, ts), false)
 
 	requested := time.Now().UTC().Add(3 * time.Hour)
 	input := tokenTestInput("7", "ticket-1")
@@ -617,11 +618,20 @@ func TestIssueReportsTheProvidersOwnExpiry(t *testing.T) {
 	if len(out.PlaintextData) != 1 {
 		t.Fatalf("expected one plaintext value, got %d", len(out.PlaintextData))
 	}
-	if out.PlaintextData[0].GetName() != serviceAccountTokenPlaintextName {
-		t.Fatalf("unexpected plaintext name %q", out.PlaintextData[0].GetName())
+	plaintext := out.PlaintextData[0]
+	if plaintext.GetName() != serviceAccountTokenPlaintextName {
+		t.Fatalf("unexpected plaintext name %q", plaintext.GetName())
 	}
-	if string(out.PlaintextData[0].GetBytes()) != "glsa_one_time_value" {
-		t.Fatalf("unexpected plaintext value %q", out.PlaintextData[0].GetBytes())
+	if plaintext.GetSchema() != apiKeyV2ContentType {
+		t.Fatalf("expected the delivered value to be typed %q, got %q", apiKeyV2ContentType, plaintext.GetSchema())
+	}
+	// The delivered value is the profile's own document, built from the
+	// provider's one-time token, the provider's token id and the expiry the
+	// provider reported -- not a bare token and not a locally derived deadline.
+	wantValue := `{"key_value":"glsa_one_time_value","provider":"grafana","base_url":"` + ts.URL +
+		`","key_id":"41","header_name":"Authorization","expires_at":"` + providerExpiry.UTC().Format(time.DateOnly) + `"}`
+	if got := string(plaintext.GetBytes()); got != wantValue {
+		t.Fatalf("unexpected plaintext value\n got: %s\nwant: %s", got, wantValue)
 	}
 }
 
