@@ -16,7 +16,7 @@ import (
 // `JsonV1`, one required field `key_value`, and optional `provider`, `base_url`,
 // `scopes`, `key_id`, `header_name` and `expires_at`. The identifier is frozen
 // once a secret of that type exists, so it is spelled once, here.
-const apiKeyV2ContentType = "api_key_v2"
+const apiKeyV2ContentType = "api_key_v2" //nolint:gosec // Not a credential: the profile's content-type identifier.
 
 // apiKeyV2Provider is the `provider` field for a Grafana credential.
 const apiKeyV2Provider = "grafana"
