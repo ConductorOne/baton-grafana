@@ -68,4 +68,25 @@ var (
 			capabilityPermissions("serviceaccounts:read"),
 		),
 	}
+	// resourceTypeServiceAccountToken covers Grafana service-account tokens
+	// (POST/GET/DELETE /api/serviceaccounts/:id/tokens). It is a secret type,
+	// and the one credential issuance for a service account lands on, so it is
+	// registered only when the operator grants sync-service-account-tokens.
+	//
+	// OptInRequired is deliberate: the type is only useful to a tenant that
+	// intends to vend or revoke tokens, and it needs serviceaccounts:write on
+	// top of the read permission the rest of the connector uses. Leaving it
+	// unselected keeps a sync from walking every service account's tokens for a
+	// tenant that never asked for them.
+	resourceTypeServiceAccountToken = &v2.ResourceType{
+		Id:          "service_account_token",
+		DisplayName: "Service Account Token",
+		Description: "A Grafana service-account token. Owned by, and deleted through, its service account.",
+		Traits:      []v2.ResourceType_Trait{v2.ResourceType_TRAIT_SECRET},
+		Annotations: annotations.New(
+			&v2.SkipEntitlementsAndGrants{},
+			&v2.OptInRequired{},
+			capabilityPermissions("serviceaccounts:read", "serviceaccounts:write"),
+		),
+	}
 )
