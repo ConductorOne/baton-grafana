@@ -37,6 +37,13 @@ const (
 
 	// Service accounts.
 	SearchServiceAccountsPath = "/api/serviceaccounts/search"
+	// Service account tokens. Grafana 13 deprecates the legacy /api tree in
+	// favour of /apis, but the service-account token routes have no /apis
+	// equivalent yet and the legacy routes remain fully supported, so these
+	// stay on /api. See docs/connector.mdx.
+	ListServiceAccountTokensPath  = "/api/serviceaccounts/%d/tokens"    //nolint:gosec // Not a credential: a URL path template.
+	CreateServiceAccountTokenPath = "/api/serviceaccounts/%d/tokens"    //nolint:gosec // Not a credential: a URL path template.
+	DeleteServiceAccountTokenPath = "/api/serviceaccounts/%d/tokens/%d" //nolint:gosec // Not a credential: a URL path template.
 
 	// RBAC (Cloud / Enterprise).
 	AccessControlRolesPath = "/api/access-control/roles"
@@ -66,6 +73,13 @@ var ErrUserAlreadyExists = errors.New("grafana-client: user already exists")
 // "Cannot invite external user when login is disabled." Existing users are added
 // to the org without hitting this check.
 var ErrExternalUserLoginDisabled = errors.New("grafana-client: cannot invite external user when login is disabled")
+
+// ErrServiceAccountTokenAlreadyExists is returned when Grafana rejects a token
+// creation because a token with the same name already exists in the
+// organization. Grafana scopes token-name uniqueness to the organization, not
+// to the owning service account (see api_key's org_id+name lookup), and answers
+// HTTP 400 with "already exists" rather than a 409.
+var ErrServiceAccountTokenAlreadyExists = errors.New("grafana-client: service account token name already exists in the organization")
 
 func setupPagination(addr *url.URL, paginationVars *PaginationVars) *url.Values {
 	if paginationVars == nil {

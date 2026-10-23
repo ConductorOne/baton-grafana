@@ -161,6 +161,9 @@ func (c *Client) ListUsers(ctx context.Context, pVars *PaginationVars) ([]*User,
 
 // doRequest is the only HTTP call site. It always captures rate-limit headers
 // so list and mutate callers can return them to the SDK.
+//
+// extraRequestOptions are appended after the defaults, so a caller can opt a
+// single request out of the SDK's HTTP response cache (uhttp.WithNoCache).
 func (c *Client) doRequest(
 	ctx context.Context,
 	method string,
@@ -168,6 +171,7 @@ func (c *Client) doRequest(
 	response any,
 	data any,
 	paginationVars *PaginationVars,
+	extraRequestOptions ...uhttp.RequestOption,
 ) (annotations.Annotations, error) {
 	l := ctxzap.Extract(ctx)
 	annos := annotations.Annotations{}
@@ -177,6 +181,7 @@ func (c *Client) doRequest(
 		uhttp.WithContentType("application/json"),
 		uhttp.WithAccept("application/json"),
 	}
+	reqOptions = append(reqOptions, extraRequestOptions...)
 
 	// Set authentication method — Bearer (Cloud) or Basic (self-hosted)
 	if c.IsCloud() {
@@ -531,6 +536,117 @@ func (c *Client) ListServiceAccounts(ctx context.Context, pVars *PaginationVars)
 	}
 
 	return resp.ServiceAccounts, nextPageToken(pVars, uint64(len(resp.ServiceAccounts))), annos, nil
+}
+
+// ListServiceAccountTokens calls GET /api/serviceaccounts/{id}/tokens. The
+// endpoint returns every token of the service account in one response and is
+// not paginated.
+//
+// The response may be served from the SDK's HTTP response cache, which is
+// correct for sync but not for anything that has to observe a change the
+// connector just made. Use ListServiceAccountTokensFresh for that.
+func (c *Client) ListServiceAccountTokens(ctx context.Context, serviceAccountID int) ([]*ServiceAccountToken, annotations.Annotations, error) {
+	return c.listServiceAccountTokens(ctx, serviceAccountID)
+}
+
+// ListServiceAccountTokensFresh is ListServiceAccountTokens with the SDK's HTTP
+// response cache bypassed, so the caller reads the provider's current state
+// rather than a body cached up to an hour ago.
+//
+// Every read whose result is used as evidence about a credential that was just
+// created, revoked, or expired must go through here: a cached body cannot prove
+// anything about a credential minted seconds ago.
+func (c *Client) ListServiceAccountTokensFresh(ctx context.Context, serviceAccountID int) ([]*ServiceAccountToken, annotations.Annotations, error) {
+	return c.listServiceAccountTokens(ctx, serviceAccountID, uhttp.WithNoCache())
+}
+
+func (c *Client) listServiceAccountTokens(ctx context.Context, serviceAccountID int, extraRequestOptions ...uhttp.RequestOption) ([]*ServiceAccountToken, annotations.Annotations, error) {
+	var tokens []*ServiceAccountToken
+	annos, err := c.doRequest(
+		ctx,
+		http.MethodGet,
+		c.buildResourceURL(ListServiceAccountTokensPath, serviceAccountID),
+		&tokens,
+		nil,
+		nil,
+		extraRequestOptions...,
+	)
+	if err != nil {
+		return nil, annos, fmt.Errorf("grafana-client: list service account tokens: %w", err)
+	}
+
+	return tokens, annos, nil
+}
+
+// CreateServiceAccountToken calls POST /api/serviceaccounts/{id}/tokens with an
+// explicit name and secondsToLive. secondsToLive must be positive: Grafana
+// treats 0 as "never expires" and any negative value as an invalid expiration,
+// so this method never lets a caller fall through to a non-expiring token.
+//
+// A rejected name maps to ErrServiceAccountTokenAlreadyExists, and the
+// classification is deliberately narrow: Grafana scopes token-name uniqueness to
+// the organization, and only the conflict it names that way is treated as a
+// duplicate.
+//
+// The uniqueness is a real database constraint, not merely a lookup.
+// `pkg/services/sqlstore/migrations/apikey_mig.go` creates the `api_key` table
+// with `{Cols: ["org_id", "name"], Type: UniqueIndex}`, so two concurrent creates
+// of one name cannot both commit.
+//
+// That gives two different provider answers for the same situation:
+//
+//   - Sequentially, `AddAPIKey` sees the existing row and returns
+//     `apikey.ErrDuplicate`, which the service-account API renders as HTTP 400
+//     with "service account token with given name already exists in the
+//     organization". That is the message matched here.
+//   - Concurrently, the loser's INSERT violates the unique index and
+//     `AddAPIKey` wraps the raw database error as "failed to insert token",
+//     which the API renders as HTTP 500. It is deliberately NOT reclassified as
+//     a duplicate: the error text is database-specific, and calling an arbitrary
+//     500 a duplicate would tell the caller a credential exists when it does not.
+//     The caller sees the provider's failure, and the database has still left
+//     exactly one credential in place.
+func (c *Client) CreateServiceAccountToken(ctx context.Context, serviceAccountID int, name string, secondsToLive int64) (*CreatedServiceAccountToken, annotations.Annotations, error) {
+	var created CreatedServiceAccountToken
+	annos, err := c.doRequest(
+		ctx,
+		http.MethodPost,
+		c.buildResourceURL(CreateServiceAccountTokenPath, serviceAccountID),
+		&created,
+		&CreateServiceAccountTokenRequest{Name: name, SecondsToLive: secondsToLive},
+		nil,
+	)
+	if err != nil {
+		if code := status.Code(err); (code == codes.InvalidArgument || code == codes.AlreadyExists) &&
+			strings.Contains(strings.ToLower(err.Error()), "already exists in the organization") {
+			return nil, annos, fmt.Errorf("%w: %w", ErrServiceAccountTokenAlreadyExists, err)
+		}
+		return nil, annos, fmt.Errorf("grafana-client: create service account token: %w", err)
+	}
+
+	return &created, annos, nil
+}
+
+// DeleteServiceAccountToken calls DELETE /api/serviceaccounts/{id}/tokens/{tokenId}.
+//
+// Grafana answers 404 for a token that is already gone (the store returns
+// ErrServiceAccountTokenNotFound, which carries a 404), and the same 404 for a
+// service account that no longer exists. Both mean the credential is gone, so
+// callers treat codes.NotFound as a successful deletion rather than an error.
+func (c *Client) DeleteServiceAccountToken(ctx context.Context, serviceAccountID int, tokenID int64) (annotations.Annotations, error) {
+	annos, err := c.doRequest(
+		ctx,
+		http.MethodDelete,
+		c.buildResourceURL(DeleteServiceAccountTokenPath, serviceAccountID, tokenID),
+		nil,
+		nil,
+		nil,
+	)
+	if err != nil {
+		return annos, fmt.Errorf("grafana-client: delete service account token: %w", err)
+	}
+
+	return annos, nil
 }
 
 // ListRoles calls GET /api/access-control/roles.
