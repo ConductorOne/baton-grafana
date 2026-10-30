@@ -30,8 +30,24 @@ var (
 	APIToken = field.StringField("api-token",
 		field.WithRequired(true),
 		field.WithIsSecret(true),
+		// Pinned so regeneration keeps the existing exported name: the
+		// generator's default Pascal-casing of "api-token" is "ApiToken".
+		field.WithStructFieldName("APIToken"),
 		field.WithDisplayName("API Token"),
 		field.WithDescription("Grafana Cloud service account token. When set, the connector uses Bearer authentication (Cloud mode). Leave empty for self-hosted Grafana."))
+
+	// SyncServiceAccountTokens is the operator's explicit grant to sync Grafana
+	// service-account tokens and to issue and revoke them. It is a separate
+	// switch because token creation and deletion need serviceaccounts:write,
+	// which is a higher privilege than the read access the rest of the
+	// connector uses.
+	SyncServiceAccountTokens = field.BoolField("sync-service-account-tokens",
+		field.WithDisplayName("Sync Service Account Tokens"),
+		field.WithDescription(
+			"Enable syncing Grafana service-account tokens and issuing and revoking them. "+
+				"Requires the connector's Grafana credential to hold serviceaccounts:read and serviceaccounts:write, "+
+				"and the service_account_token resource type to be selected for sync."),
+		field.WithDefaultValue(false))
 
 	//go:generate go run ./gen
 	Config = field.NewConfiguration(
@@ -40,6 +56,7 @@ var (
 			Username,
 			Password,
 			APIToken,
+			SyncServiceAccountTokens,
 		},
 		field.WithConnectorDisplayName("Grafana"),
 		field.WithHelpUrl("/docs/baton/grafana"),

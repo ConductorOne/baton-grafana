@@ -138,6 +138,12 @@
           "isRequired": true
         }
       }
+    },
+    {
+      "name": "sync-service-account-tokens",
+      "displayName": "Sync Service Account Tokens",
+      "description": "Enable syncing Grafana service-account tokens and issuing and revoking them. Requires the connector's Grafana credential to hold serviceaccounts:read and serviceaccounts:write, and the service_account_token resource type to be selected for sync.",
+      "boolField": {}
     }
   ],
   "displayName": "Grafana",
