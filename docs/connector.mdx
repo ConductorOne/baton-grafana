@@ -18,9 +18,9 @@ sidebarTitle: "Grafana"
 
 Team membership can be granted and revoked. Grafana RBAC roles that a team holds (IRM and OnCall plugin roles such as **Schedules Editor**) are synced as read-only assignments and require Grafana Cloud or Enterprise. Service accounts are synced with their organization role; they are read-only.
 
-On self-hosted Grafana with more than one organization, the connector syncs teams and service accounts only from the organization currently selected for the Grafana account it signs in with. Organizations, organization roles, and accounts sync from every organization on the instance, so teams and service accounts that belong to other organizations do not appear in C1.
+On self-hosted Grafana with more than one organization, the connector syncs teams and service accounts only from the organization currently selected for the Grafana account it signs in with. Organizations, organization role assignments (**Viewer**, **Editor**, and **Admin**), and accounts still sync from every organization on the instance, but teams and service accounts that belong to other organizations do not appear in C1.
 
-Accounts and service accounts whose organization role is **None** (**No basic role** in Grafana) still sync, but C1 shows no organization role for them: the connector models only the **Viewer**, **Editor**, and **Admin** roles. Access reviews of an organization do not include these members.
+Accounts and service accounts whose organization role is **None** (**No basic role** in Grafana) still sync, but C1 shows no organization role for them: the connector models only the **Viewer**, **Editor**, and **Admin** roles. Access reviews of an organization's role entitlements do not include these members.
 
 [This connector syncs non-human identities](/product/admin/nhi) and displays them on the **Identities overview** dashboard.
 
@@ -40,7 +40,7 @@ For Grafana Cloud, account creation is invite-based and no connector-generated p
 <Note>
 **Self-hosted Grafana: account creation needs a credential store**
 
-On self-hosted Grafana, the connector generates a password for every account it creates, and C1 must store that password in a [vault](/product/admin/vaults). In the app's account provisioning settings, set **Password storage** to **Save to credential store** and select a credential store. The connector does not support **Do not save password** for self-hosted Grafana.
+On self-hosted Grafana, every account the connector creates gets a password, which the connector returns to C1 to store. In the app's [account provisioning](/product/admin/account-provisioning) settings, set **Password storage** to **Save to credential store** and select a [vault](/product/admin/vaults). The connector does not support **Do not save password** for self-hosted Grafana.
 </Note>
 
 <Warning>
@@ -158,7 +158,7 @@ No built-in Grafana role grants one of these actions without the other: `fixed:r
 
 You will need:
 
-* Your Grafana Cloud instance URL (e.g., `https://your-org.grafana.net`)
+* Your Grafana Cloud instance URL, including the scheme (for example, `https://your-org.grafana.net`)
 * The service account token generated above
 
 **Done.** Next, move on to the connector configuration instructions.
@@ -332,7 +332,7 @@ stringData:
   BATON_CLIENT_SECRET: <C1 client secret>
 
   # Grafana Cloud credentials
-  BATON_HOSTNAME: <Grafana Cloud instance URL>       # e.g. https://your-org.grafana.net
+  BATON_HOSTNAME: <Grafana Cloud instance URL>       # Include the scheme, for example https://your-org.grafana.net
   BATON_AUTH_METHOD: api-key-flow-group              # Required for Grafana Cloud: the connector then expects BATON_API_TOKEN instead of a username and password
   BATON_API_TOKEN: <service account token>
 

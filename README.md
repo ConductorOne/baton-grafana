@@ -80,14 +80,14 @@ You can install `baton-grafana` using **Homebrew**, **Docker**, or directly from
 `baton-grafana` supports two authentication methods, and `--auth-method` selects which fields are required:
 
 - **Self-hosted Grafana** (`basic-auth-flow-group`, the default): the username and password of an account with **admin-level access**.
-- **Grafana Cloud** (`api-key-flow-group`, required for Cloud): a service account token with the Admin role.
+- **Grafana Cloud** (`api-key-flow-group`): a service account token with the Admin role.
 
 **Configuration Fields:**
 
 | Parameter     | Required      | Default                            | Description                                       |
 |---------------|---------------|------------------------------------|---------------------------------------------------|
 | --hostname    | Yes           | -                                  | The Grafana instance URL, including the scheme (for example, `https://grafana.example.com`). |
-| --auth-method | Grafana Cloud | `basic-auth-flow-group` when unset or unrecognized | `api-key-flow-group` for Grafana Cloud (required), or `basic-auth-flow-group` for self-hosted Grafana (the default). |
+| --auth-method | Grafana Cloud | `basic-auth-flow-group` when unset or unrecognized | `api-key-flow-group` for Grafana Cloud, or `basic-auth-flow-group` for self-hosted Grafana (the default). Unless it is `api-key-flow-group`, validation requires `--username` and `--password`. |
 | --username    | Self-hosted   | -                                  | Grafana admin username.                           |
 | --password    | Self-hosted   | -                                  | Grafana admin password.                           |
 | --api-token   | Grafana Cloud | -                                  | Grafana Cloud service account token.              |
