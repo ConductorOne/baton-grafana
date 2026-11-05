@@ -32,10 +32,11 @@ Check out [Baton](https://github.com/conductorone/baton) to learn more about the
 
 ### Requirements
 Before using `baton-grafana`, ensure you have:
-- A running **Grafana instance**.
-- The **Grafana domain URL** for API access.
-- An **admin account** with sufficient privileges.
-- A valid **username** and **password** for authentication.
+- A running **Grafana instance** (self-hosted or Grafana Cloud).
+- The **Grafana instance URL**, including the scheme (for example, `https://grafana.example.com`).
+- Credentials for one of the two authentication methods:
+  - **Self-hosted Grafana:** the **username** and **password** of an admin account.
+  - **Grafana Cloud:** a **service account token** with the Admin role.
 
 ---
 
@@ -49,10 +50,18 @@ You can install `baton-grafana` using **Homebrew**, **Docker**, or directly from
     baton resources
 
 ### Docker
+    # Self-hosted Grafana
     docker run --rm -v $(pwd):/out \
-      -e BATON_HOSTNAME=<hostname> \
+      -e BATON_HOSTNAME=<instance URL> \
       -e BATON_USERNAME=<username> \
       -e BATON_PASSWORD=<password> \
+      public.ecr.aws/conductorone/baton-grafana:latest -f "/out/sync.c1z"
+
+    # Grafana Cloud
+    docker run --rm -v $(pwd):/out \
+      -e BATON_HOSTNAME=<instance URL> \
+      -e BATON_AUTH_METHOD=api-key-flow-group \
+      -e BATON_API_TOKEN=<service account token> \
       public.ecr.aws/conductorone/baton-grafana:latest -f "/out/sync.c1z"
 
     docker run --rm -v $(pwd):/out ghcr.io/conductorone/baton:latest -f "/out/sync.c1z" resources
@@ -68,21 +77,34 @@ You can install `baton-grafana` using **Homebrew**, **Docker**, or directly from
 
 ## Configuration
 
-`baton-grafana` requires a **Grafana username and password** for authentication. These credentials must have **admin-level access** to retrieve organization, user, and permission data.
+`baton-grafana` supports two authentication methods, and `--auth-method` selects which fields are required:
+
+- **Self-hosted Grafana** (`basic-auth-flow-group`, the default): the username and password of an account with **admin-level access**.
+- **Grafana Cloud** (`api-key-flow-group`, required for Cloud): a service account token with the Admin role.
 
 **Configuration Fields:**
 
-| Parameter     | Required | Default                 | Description                                       |
-|---------------|----------|-------------------------|---------------------------------------------------|
-| --hostname    | Yes      | -                       | The Grafana instance URL (e.g., `https://grafana.example.com`). |
-| --username    | Yes      | -                       | Grafana admin username.                           |
-| --password    | Yes      | -                       | Grafana admin password.                           |
+| Parameter     | Required      | Default                            | Description                                       |
+|---------------|---------------|------------------------------------|---------------------------------------------------|
+| --hostname    | Yes           | -                                  | The Grafana instance URL, including the scheme (for example, `https://grafana.example.com`). |
+| --auth-method | Grafana Cloud | `basic-auth-flow-group` when unset or unrecognized | `api-key-flow-group` for Grafana Cloud (required), or `basic-auth-flow-group` for self-hosted Grafana (the default). |
+| --username    | Self-hosted   | -                                  | Grafana admin username.                           |
+| --password    | Self-hosted   | -                                  | Grafana admin password.                           |
+| --api-token   | Grafana Cloud | -                                  | Grafana Cloud service account token.              |
 
-You can also set these values using environment variables:
+A non-empty `--api-token` switches the connector to Grafana Cloud mode (Bearer authentication and the current-organization endpoints), even when `--username` and `--password` are also set. Leave it unset for self-hosted Grafana.
 
-    export BATON_HOSTNAME="http://example.com"
+You can also set these values using environment variables. For self-hosted Grafana:
+
+    export BATON_HOSTNAME="https://grafana.example.com"
     export BATON_USERNAME="admin"
     export BATON_PASSWORD="your-password"
+
+For Grafana Cloud:
+
+    export BATON_HOSTNAME="https://your-org.grafana.net"
+    export BATON_AUTH_METHOD="api-key-flow-group"
+    export BATON_API_TOKEN="your-service-account-token"
 
 ---
 
@@ -142,14 +164,25 @@ Show permissions available in Grafana:
 
 This information provides insight into user access management in Grafana.
 
+Sync scope and limits:
+
+- On self-hosted Grafana with more than one organization, teams and service accounts sync only from the organization currently selected for the Grafana account the connector signs in with. Organizations, organization roles, and users sync from every organization.
+- Users and service accounts whose organization role is `None` (No basic role) still sync, but get no organization grant: the connector models only the Viewer, Editor, and Admin roles.
+- Service account sync requires the `GET /api/serviceaccounts/search` endpoint. If it returns `404`, the sync currently completes without service accounts.
+
 ---
 
 ## Account Provisioning
 
 `baton-grafana` supports account provisioning in both self-hosted and Grafana Cloud modes, but the behavior differs:
 
-- **Self-hosted Grafana:** a new user is created directly (`POST /api/admin/users`) and the generated password is returned to ConductorOne.
+- **Self-hosted Grafana:** a new user is created directly (`POST /api/admin/users`) and the generated password is returned to ConductorOne. The connector supports only passwords that ConductorOne stores: set the app's account provisioning **Password storage** to **Save to credential store**. **Do not save password** is not supported.
 - **Grafana Cloud:** account creation is invite-based (`POST /api/org/invites`) and no password is returned.
+
+Account deletion also differs by mode:
+
+- **Self-hosted Grafana:** the user is deleted from the instance (`DELETE /api/admin/users/{id}`).
+- **Grafana Cloud:** the user is removed from the organization (`DELETE /api/org/users/{id}`). Their Grafana Cloud account is not deleted.
 
 > **Grafana Cloud prerequisite — the basic login form must allow the invite.**
 > Grafana Cloud instances ship with the basic login form **disabled** by default (users authenticate through grafana.com / SSO). While it is disabled, Grafana rejects instance-level invites for users who do not yet exist in the instance, and account creation fails with `Cannot invite external user when login is disabled.`
@@ -179,9 +212,11 @@ Below is a complete list of supported flags along with their corresponding envir
 | **-h, --help**       | Show help and usage information                                                            | -                      | -                  |
 | **-p, --provisioning** | Enable provisioning support (if supported by the connector)                              | `BATON_PROVISIONING`   | -                  |
 | **-v, --version**    | Show version information                                                                   | -                      | -                  |
+| **--api-token**      | Grafana Cloud service account token; a non-empty value selects Grafana Cloud mode           | `BATON_API_TOKEN`      | -                  |
+| **--auth-method**    | `basic-auth-flow-group` (self-hosted) or `api-key-flow-group` (Grafana Cloud)               | `BATON_AUTH_METHOD`    | `basic-auth-flow-group` when unset or unrecognized |
 | **--client-id**      | The client ID used to authenticate with ConductorOne                                       | `BATON_CLIENT_ID`      | -                  |
 | **--client-secret**  | The client secret used to authenticate with ConductorOne                                   | `BATON_CLIENT_SECRET`  | -                  |
-| **--hostname**       | Grafana instance URL (e.g., `https://grafana.example.com`)                                 | `BATON_HOSTNAME`       | -                  |
+| **--hostname**       | Grafana instance URL, including the scheme (for example, `https://grafana.example.com`)    | `BATON_HOSTNAME`       | -                  |
 | **--log-format**     | The output format for logs: `json` or `console`                                            | `BATON_LOG_FORMAT`     | `json`             |
 | **--log-level**      | The log level: `debug`, `info`, `warn`, `error`                                            | `BATON_LOG_LEVEL`      | `info`             |
 | **--password**       | Grafana admin password                                                                     | `BATON_PASSWORD`       | -                  |
@@ -189,7 +224,7 @@ Below is a complete list of supported flags along with their corresponding envir
 | **--ticketing**      | Enable ticketing support (if the connector supports ticketing features)                    | `BATON_TICKETING`      | -                  |
 | **--username**       | Grafana admin username                                                                     | `BATON_USERNAME`       | -                  |
 
-> **Tip**: You can combine flags and environment variables. For example, if you set `BATON_HOSTNAME=my-grafana.domain` as environment variable, you don’t need to pass `--hostname` explicitly when running commands.
+> **Tip**: You can combine flags and environment variables. For example, if you set `BATON_HOSTNAME=https://grafana.example.com` as an environment variable, you don’t need to pass `--hostname` explicitly when running commands.
 
 ---
 
