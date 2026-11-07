@@ -24,7 +24,13 @@ func main() {
 		version,
 		cfg.Config,
 		getConnector,
-		connectorrunner.WithDefaultCapabilitiesConnectorBuilderV2(&connector.Grafana{}),
+		connectorrunner.WithDefaultCapabilitiesConnectorBuilderV2(&connector.Grafana{
+			// Every optional surface is forced on so `./connector capabilities`
+			// documents the connector's full capability set. The generated document
+			// is static and has no conditional form; the per-install gating lives in
+			// ResourceSyncers, keyed on the flag set from configuration.
+			SyncServiceAccountTokens: true,
+		}),
 	)
 }
 
@@ -33,7 +39,7 @@ func getConnector(ctx context.Context, gc *cfg.Grafana, connectorOpts *cli.Conne
 ) {
 	l := ctxzap.Extract(ctx)
 
-	cb, err := connector.New(ctx, gc.Hostname, gc.Username, gc.Password, gc.APIToken, connectorOpts)
+	cb, err := connector.New(ctx, gc.Hostname, gc.Username, gc.Password, gc.APIToken, gc.SyncServiceAccountTokens, connectorOpts)
 	if err != nil {
 		l.Error("error creating connector", zap.Error(err))
 		return nil, nil, err

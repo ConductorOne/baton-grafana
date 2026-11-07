@@ -186,6 +186,7 @@ Below is a complete list of supported flags along with their corresponding envir
 | **--log-level**      | The log level: `debug`, `info`, `warn`, `error`                                            | `BATON_LOG_LEVEL`      | `info`             |
 | **--password**       | Grafana admin password                                                                     | `BATON_PASSWORD`       | -                  |
 | **--skip-full-sync** | Skip a full sync (helpful for incremental updates if supported by the connector)           | `BATON_SKIP_FULL_SYNC` | -                  |
+| **--sync-service-account-tokens** | Sync Grafana service-account tokens, and enable issuing and revoking them for credential vending. Requires `serviceaccounts:read` and `serviceaccounts:write` | `BATON_SYNC_SERVICE_ACCOUNT_TOKENS` | `false` |
 | **--ticketing**      | Enable ticketing support (if the connector supports ticketing features)                    | `BATON_TICKETING`      | -                  |
 | **--username**       | Grafana admin username                                                                     | `BATON_USERNAME`       | -                  |
 
