@@ -98,9 +98,7 @@
         ]
       },
       "capabilities": [
-        "CAPABILITY_SYNC",
-        "CAPABILITY_CREDENTIAL_ISSUE",
-        "CAPABILITY_CREDENTIAL_ENCRYPTION_JWE_XWING_V1"
+        "CAPABILITY_SYNC"
       ],
       "permissions": {
         "permissions": [
@@ -108,19 +106,6 @@
             "permission": "serviceaccounts:read"
           }
         ]
-      },
-      "credentialIssue": {
-        "options": [
-          {
-            "option": "CAPABILITY_DETAIL_CREDENTIAL_OPTION_API_KEY",
-            "expiry": {
-              "min": "60s"
-            },
-            "resourceMode": "CREDENTIAL_RESOURCE_MODE_DISCOVERABLE",
-            "secretResourceTypeId": "service_account_token"
-          }
-        ],
-        "preferredOption": "CAPABILITY_DETAIL_CREDENTIAL_OPTION_API_KEY"
       }
     },
     {
@@ -270,8 +255,7 @@
     "CAPABILITY_SYNC",
     "CAPABILITY_ACCOUNT_PROVISIONING",
     "CAPABILITY_RESOURCE_DELETE",
-    "CAPABILITY_CREDENTIAL_ISSUE",
-    "CAPABILITY_CREDENTIAL_ENCRYPTION_JWE_XWING_V1"
+    "CAPABILITY_ACTIONS"
   ],
   "credentialDetails": {
     "capabilityAccountProvisioning": {
