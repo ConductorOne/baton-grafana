@@ -28,7 +28,7 @@ import (
 // issuerExpiry is the expiry the fake provider reports for a freshly minted token.
 var issuerExpiry = time.Date(2026, 12, 1, 8, 30, 0, 0, time.UTC)
 
-const issuerSecret = "glsa_one_time_value"
+const issuerSecret = "glsa_one_time_value" //nolint:gosec // Fake provider value used only by tests.
 
 func newIssuerFixture() *tokenFixture {
 	exp := issuerExpiry
