@@ -2,7 +2,6 @@ package connector
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -18,16 +17,9 @@ import (
 	"go.uber.org/zap"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
-	"google.golang.org/protobuf/types/known/durationpb"
-	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 const (
-	// serviceAccountTokenNamePrefix prefixes the provider-side name of every
-	// token this connector issues. The rest of the name is the C1 request id,
-	// which is what makes a retried issuance detectable instead of duplicable.
-	serviceAccountTokenNamePrefix = "c1-"
-
 	// serviceAccountTokenHandleSeparator joins the two provider ids Grafana
 	// needs to address one token into the single string the SDK's resource id
 	// carries.
@@ -37,38 +29,11 @@ const (
 	// for a Grafana service-account token.
 	serviceAccountTokenDetail = "grafana.service_account_token"
 
-	// serviceAccountTokenPlaintextName is the name of the one plaintext value
-	// the connector returns for a freshly issued token.
-	serviceAccountTokenPlaintextName = "token"
-
-	// serviceAccountTokenDefaultTTL is the lifetime the connector mints a token
-	// with when the caller supplies no deadline.
-	//
-	// Grafana reads secondsToLive == 0 as "never expires", so a missing deadline
-	// must never fall through to zero: the connector always sends a positive
-	// number of seconds. Until C1 forwards an offering's expiry (IGA-4626) this
-	// fallback is the only lifetime a request gets, so it is short on purpose —
-	// a day is long enough to retrieve and use a vended credential and short
-	// enough that an unrevoked one does not outlive the request that minted it.
-	serviceAccountTokenDefaultTTL = 24 * time.Hour
-
 	// serviceAccountTokenMinTTL is the shortest caller-selected lifetime the
 	// connector advertises. Grafana accepts any positive secondsToLive, but a
 	// floor keeps a request from minting a token that has effectively expired
 	// before it is delivered.
 	serviceAccountTokenMinTTL = time.Minute
-
-	// serviceAccountTokenClockSkewBuffer is subtracted from a requested lifetime
-	// before it is sent to Grafana.
-	//
-	// Grafana derives the token's expiry from its own clock when it handles the
-	// create, which is strictly later than the clock read here, so sending the
-	// full remaining duration would produce an expiry past the deadline C1
-	// approved. The buffer absorbs a normal round trip. It is not a guarantee:
-	// the connector verifies the provider's own reported expiry against the
-	// approved deadline and fails the issuance when it is later, rather than
-	// clamping the reported value to something the provider never said.
-	serviceAccountTokenClockSkewBuffer = 30 * time.Second
 
 	// serviceAccountTokenCleanupTimeout bounds the best-effort removal of a
 	// token this connector minted but cannot hand back. It is bounded so a
@@ -100,9 +65,9 @@ const (
 )
 
 var (
-	_ connectorbuilder.ResourceSyncerV2   = (*serviceAccountTokenBuilder)(nil)
-	_ connectorbuilder.ResourceDeleterV2  = (*serviceAccountTokenBuilder)(nil)
-	_ connectorbuilder.CredentialIssuerV2 = (*credentialServiceAccountBuilder)(nil)
+	_ connectorbuilder.ResourceSyncerV2       = (*serviceAccountTokenBuilder)(nil)
+	_ connectorbuilder.ResourceDeleterV2      = (*serviceAccountTokenBuilder)(nil)
+	_ connectorbuilder.ResourceActionProvider = (*serviceAccountTokenBuilder)(nil)
 )
 
 // serviceAccountTokenBuilder syncs Grafana service-account tokens and provides
@@ -299,297 +264,6 @@ func (t *serviceAccountTokenBuilder) Delete(ctx context.Context, resourceID *v2.
 	return nil, nil
 }
 
-// credentialServiceAccountBuilder adds credential issuance for an existing
-// service account to the service-account syncer. It is registered instead of
-// the plain serviceAccountBuilder only when the operator grants
-// sync-service-account-tokens, which also registers the token resource type the
-// issued credential lands on and the revoke path for it.
-type credentialServiceAccountBuilder struct {
-	*serviceAccountBuilder
-}
-
-func newCredentialServiceAccountBuilder(client *grafana.Client, syncOrgs bool) *credentialServiceAccountBuilder {
-	return &credentialServiceAccountBuilder{serviceAccountBuilder: newServiceAccountBuilder(client, syncOrgs)}
-}
-
-// IssueCapabilityDetails advertises the one credential kind this connector
-// mints: a Grafana service-account token, which is the API_KEY shape.
-//
-// The descriptor declares an IssuanceExpiryCapability, which is what tells C1
-// that Grafana owns this credential's clock: the approved deadline is sent to
-// the connector as the token's secondsToLive, and the lifecycle row lands
-// CONNECTOR-owned so C1 burns the delivery envelope at expiry instead of
-// queueing a provider delete for a credential the provider expires itself.
-//
-// No scopes are advertised and custom scopes are disallowed: a Grafana service
-// account token inherits its service account's permissions and cannot be
-// scoped, so the SDK rejects a scoped request for this kind before Issue runs.
-func (b *credentialServiceAccountBuilder) IssueCapabilityDetails(context.Context) (*v2.CredentialDetailsCredentialIssue, annotations.Annotations, error) {
-	return v2.CredentialDetailsCredentialIssue_builder{
-		Options: []*v2.CredentialIssueOptionDescriptor{
-			v2.CredentialIssueOptionDescriptor_builder{
-				Option: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_API_KEY,
-				Expiry: v2.IssuanceExpiryCapability_builder{
-					Min: durationpb.New(serviceAccountTokenMinTTL),
-				}.Build(),
-				ResourceMode:         v2.CredentialResourceMode_CREDENTIAL_RESOURCE_MODE_DISCOVERABLE,
-				SecretResourceTypeId: resourceTypeServiceAccountToken.Id,
-			}.Build(),
-		},
-		PreferredOption: v2.CapabilityDetailCredentialOption_CAPABILITY_DETAIL_CREDENTIAL_OPTION_API_KEY,
-	}.Build(), nil, nil
-}
-
-// Issue mints one service-account token for an existing service account.
-//
-// The subject is the synced service account itself: Grafana has no per-request
-// service account creation, and a token's permissions are the account's. The
-// returned secret carries the provider token id as its revocation handle, and
-// the one-time token value as the plaintext the SDK encrypts for delivery.
-//
-// Issue is not retried automatically. A failure after the provider mint either
-// cleans the token up on the spot or reports the failure with the token's id so
-// it stays revocable; nothing here re-runs on its own.
-func (b *credentialServiceAccountBuilder) Issue(ctx context.Context, input *connectorbuilder.CredentialIssueInput) (*connectorbuilder.CredentialIssueOutput, error) {
-	if input == nil || input.IdentityID == nil ||
-		input.IdentityID.GetResourceType() != resourceTypeServiceAccount.Id ||
-		input.IdentityID.GetResource() == "" {
-		return nil, status.Error(codes.InvalidArgument, "baton-grafana: a Grafana service account identity is required")
-	}
-	if got := input.CredentialOptions.GetSecretResourceTypeId(); got != resourceTypeServiceAccountToken.Id {
-		return nil, status.Errorf(codes.InvalidArgument, "baton-grafana: unsupported credential secret resource type %q", got)
-	}
-	serviceAccountID, err := strconv.Atoi(input.IdentityID.GetResource())
-	if err != nil || serviceAccountID <= 0 {
-		return nil, status.Errorf(codes.InvalidArgument,
-			"baton-grafana: service account id %q is not a valid Grafana service account id", input.IdentityID.GetResource())
-	}
-	if scopes := input.CredentialOptions.GetApiKey().GetScopes(); len(scopes) != 0 {
-		// The SDK rejects a scoped request for this descriptor before Issue runs.
-		// Re-checking keeps the arm correct for a caller that reaches Issue
-		// directly, and fails closed rather than minting a token whose
-		// permissions the caller did not get to choose.
-		return nil, status.Error(codes.InvalidArgument,
-			"baton-grafana: Grafana service account tokens inherit their service account's permissions and cannot be scoped")
-	}
-
-	secondsToLive, approvedDeadline, err := serviceAccountTokenLifetime(input.ExpiresAt, time.Now().UTC())
-	if err != nil {
-		return nil, err
-	}
-
-	name := serviceAccountTokenName(input.RequestID)
-
-	// Retry safety. The token name is derived from the C1 request id, so a
-	// retried issuance finds its predecessor's token instead of minting a
-	// second one. Grafana returns the plaintext exactly once, so an existing
-	// token cannot be handed back; the retry fails with AlreadyExists and the
-	// provider is left holding exactly one credential for the request.
-	//
-	// This lookup is a fast path, not the guard, and it is deliberately not
-	// treated as one. The SDK's HTTP client caches GET responses (one hour by
-	// default), so a retry that lands inside that window can read a token list
-	// taken before the first attempt minted; and a list-before-create by name is
-	// not atomic against a concurrent create either. What actually prevents a
-	// duplicate is Grafana itself: token names are unique per organization, so
-	// the create below is rejected, and that rejection is classified narrowly
-	// enough (see CreateServiceAccountToken) to mean a name conflict and nothing
-	// else.
-	tokens, _, err := b.client.ListServiceAccountTokens(ctx, serviceAccountID)
-	if err != nil {
-		return nil, fmt.Errorf("baton-grafana: look up service account token for request %q: %w", input.RequestID, err)
-	}
-	if existing := findServiceAccountTokenByName(tokens, name); existing != nil {
-		return nil, duplicateServiceAccountTokenError(name, input.RequestID)
-	}
-
-	created, _, err := b.client.CreateServiceAccountToken(ctx, serviceAccountID, name, secondsToLive)
-	if err != nil {
-		if errors.Is(err, grafana.ErrServiceAccountTokenAlreadyExists) {
-			return nil, duplicateServiceAccountTokenError(name, input.RequestID)
-		}
-		// The response to a create can be lost after the provider committed it.
-		// Nothing here retries or removes: the connector does not know whether a
-		// token exists, and guessing either way is worse than saying so. The
-		// token, if it exists, is named c1-<request id>, so the next sync
-		// inventories it and the request can be revoked by handle. A later
-		// attempt for the same request id gets the name-conflict rejection above
-		// rather than minting a second credential.
-		return nil, fmt.Errorf("baton-grafana: create service account token for request %q: %w", input.RequestID, err)
-	}
-
-	if created.ID <= 0 || created.Key == "" {
-		// A response without an id has no revocation handle and a response
-		// without a value has nothing to deliver. Both leave a live token the
-		// caller cannot use or revoke, so remove it before failing.
-		return nil, b.failIssuedServiceAccountToken(ctx, serviceAccountID, created.ID, name,
-			status.Error(codes.Internal, "baton-grafana: Grafana returned a service account token without an id or value"))
-	}
-
-	// The expiry reported on the credential must be the provider's own, not the
-	// deadline this connector computed. Grafana starts the token's clock when it
-	// handles the create, which is after the clock read above, so a locally
-	// derived value can be earlier than the real expiry and a locally clamped
-	// one can be later than the deadline C1 approved. Read it back, uncached.
-	providerExpiry, found, err := b.readBackIssuedServiceAccountToken(ctx, serviceAccountID, created.ID)
-	if err != nil {
-		return nil, b.failIssuedServiceAccountToken(ctx, serviceAccountID, created.ID, name,
-			fmt.Errorf("baton-grafana: read back the issued service account token: %w", err))
-	}
-	if !found {
-		return nil, b.failIssuedServiceAccountToken(ctx, serviceAccountID, created.ID, name,
-			status.Errorf(codes.Internal, "baton-grafana: Grafana did not report the service account token it just created (id %d)", created.ID))
-	}
-	if providerExpiry == nil {
-		// Grafana reports a null expiration for a token that never expires. The
-		// connector never asks for one, so this is the provider contradicting the
-		// request: fail rather than report a credential with no deadline.
-		return nil, b.failIssuedServiceAccountToken(ctx, serviceAccountID, created.ID, name,
-			status.Error(codes.Internal, "baton-grafana: Grafana issued a non-expiring service account token for a request that asked for an expiry"))
-	}
-	if approvedDeadline != nil && providerExpiry.After(*approvedDeadline) {
-		// The provider's own expiry is later than the deadline C1 approved. There
-		// is no honest way to report that: clamping the value would state an
-		// expiry the provider never gave, and returning it would tell C1 a
-		// credential dies when it does not.
-		return nil, b.failIssuedServiceAccountToken(ctx, serviceAccountID, created.ID, name,
-			status.Errorf(codes.Internal,
-				"baton-grafana: Grafana expired the service account token at %s, after the approved deadline %s",
-				providerExpiry.UTC().Format(time.RFC3339), approvedDeadline.UTC().Format(time.RFC3339)))
-	}
-
-	secret, err := issuedServiceAccountTokenResource(input.IdentityID, created.ID, name, *providerExpiry)
-	if err != nil {
-		return nil, b.failIssuedServiceAccountToken(ctx, serviceAccountID, created.ID, name,
-			fmt.Errorf("baton-grafana: build service account token secret resource: %w", err))
-	}
-
-	return &connectorbuilder.CredentialIssueOutput{
-		Secret: secret,
-		PlaintextData: []*v2.PlaintextData{
-			v2.PlaintextData_builder{Name: serviceAccountTokenPlaintextName, Bytes: []byte(created.Key)}.Build(),
-		},
-		ResourceMode: v2.CredentialResourceMode_CREDENTIAL_RESOURCE_MODE_DISCOVERABLE,
-	}, nil
-}
-
-// readBackIssuedServiceAccountToken reads the token the provider just minted,
-// from a response that bypasses the SDK's HTTP response cache, and returns the
-// expiry the provider itself reports. A nil expiry means the provider reports
-// the token as non-expiring.
-func (b *credentialServiceAccountBuilder) readBackIssuedServiceAccountToken(ctx context.Context, serviceAccountID int, tokenID int64) (*time.Time, bool, error) {
-	tokens, _, err := b.client.ListServiceAccountTokensFresh(ctx, serviceAccountID)
-	if err != nil {
-		return nil, false, err
-	}
-	for _, token := range tokens {
-		if token != nil && token.ID == tokenID {
-			return token.Expiration, true, nil
-		}
-	}
-	return nil, false, nil
-}
-
-// failIssuedServiceAccountToken removes a token this call minted but cannot
-// report, and returns the rejection with the cleanup outcome attached.
-//
-// A cleanup that did not complete is part of the returned error, not a log
-// line: the credential is then live at the provider and this connector holds
-// its only handle, so the caller has to see that. The rejection reason is
-// preserved alongside it.
-func (b *credentialServiceAccountBuilder) failIssuedServiceAccountToken(ctx context.Context, serviceAccountID int, tokenID int64, name string, reason error) error {
-	if cleanupErr := b.cleanupIssuedServiceAccountToken(ctx, serviceAccountID, tokenID, name); cleanupErr != nil {
-		return errors.Join(reason, fmt.Errorf(
-			"baton-grafana: the minted service account token %q could not be removed and may still be live: %w", name, cleanupErr))
-	}
-	return reason
-}
-
-// cleanupIssuedServiceAccountToken removes a token this call minted but cannot
-// hand back, so a failure after the provider write does not leave a live
-// credential with no handle. It returns an error when the removal did not
-// complete, so the caller can surface it.
-func (b *credentialServiceAccountBuilder) cleanupIssuedServiceAccountToken(ctx context.Context, serviceAccountID int, tokenID int64, name string) error {
-	// Detached from ctx so cleanup still runs when the caller's context is done,
-	// and bounded so a provider that stops answering cannot hold the issuance
-	// open indefinitely.
-	cleanupCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), serviceAccountTokenCleanupTimeout)
-	defer cancel()
-
-	if tokenID <= 0 {
-		// No id came back, so the name the token was created under is the only
-		// handle on it. The read bypasses the response cache for the same reason
-		// the readback does: a cached body cannot show a token minted seconds ago.
-		tokens, _, err := b.client.ListServiceAccountTokensFresh(cleanupCtx, serviceAccountID)
-		if err != nil {
-			return fmt.Errorf("look up the service account token to clean up: %w", err)
-		}
-		existing := findServiceAccountTokenByName(tokens, name)
-		if existing == nil {
-			return nil
-		}
-		tokenID = existing.ID
-	}
-
-	if _, err := b.client.DeleteServiceAccountToken(cleanupCtx, serviceAccountID, tokenID); err != nil && status.Code(err) != codes.NotFound {
-		return fmt.Errorf("delete service account token %d: %w", tokenID, err)
-	}
-	return nil
-}
-
-// serviceAccountTokenLifetime resolves the secondsToLive to send to Grafana and
-// the deadline the issued token must not outlive.
-//
-// Grafana reads secondsToLive == 0 as "never expires" and a negative value as
-// an invalid expiration, so a requested deadline must never be allowed to fall
-// through to zero: a missing deadline takes the connector's explicit fallback
-// lifetime, and a deadline that has already passed fails the issuance rather
-// than minting a token that never expires.
-//
-// The returned deadline is the caller's approved deadline, or nil when the
-// connector chose the lifetime itself. It is a ceiling to verify against, never
-// a value to report: the caller reads the provider's own expiry back and fails
-// the issuance when it lands later. The secondsToLive sent is the remaining
-// duration less the dispatch buffer, floored to whole seconds.
-func serviceAccountTokenLifetime(requested *timestamppb.Timestamp, now time.Time) (int64, *time.Time, error) {
-	if requested == nil {
-		return int64(serviceAccountTokenDefaultTTL / time.Second), nil, nil
-	}
-	if err := requested.CheckValid(); err != nil {
-		return 0, nil, status.Errorf(codes.InvalidArgument, "baton-grafana: requested credential expiry is invalid: %v", err)
-	}
-
-	remaining := requested.AsTime().Sub(now)
-	if remaining < serviceAccountTokenMinTTL {
-		return 0, nil, status.Errorf(codes.InvalidArgument,
-			"baton-grafana: requested credential expiry leaves %s, below the connector's %s minimum",
-			remaining.Round(time.Second), serviceAccountTokenMinTTL)
-	}
-
-	secondsToLive := int64((remaining - serviceAccountTokenClockSkewBuffer) / time.Second)
-	if secondsToLive < 1 {
-		return 0, nil, status.Errorf(codes.InvalidArgument,
-			"baton-grafana: requested credential expiry leaves no room for the connector's %s dispatch buffer",
-			serviceAccountTokenClockSkewBuffer)
-	}
-
-	deadline := requested.AsTime()
-	return secondsToLive, &deadline, nil
-}
-
-// serviceAccountTokenName is the provider-side name of a token this connector
-// issues. It is derived from the C1 request id so a retried request finds its
-// predecessor's token instead of minting a second one.
-func serviceAccountTokenName(requestID string) string {
-	return serviceAccountTokenNamePrefix + requestID
-}
-
-func duplicateServiceAccountTokenError(name, requestID string) error {
-	return status.Errorf(codes.AlreadyExists,
-		"baton-grafana: service account token %q for request %q already exists at the provider; refusing to issue a duplicate",
-		name, requestID)
-}
-
 func findServiceAccountTokenByName(tokens []*grafana.ServiceAccountToken, name string) *grafana.ServiceAccountToken {
 	for _, token := range tokens {
 		if token != nil && token.Name == name {
@@ -672,24 +346,4 @@ func serviceAccountTokenDisplayName(token *grafana.ServiceAccountToken) string {
 		return token.Name
 	}
 	return fmt.Sprintf("token-%d", token.ID)
-}
-
-// issuedServiceAccountTokenResource builds the resource for a token this
-// connector just minted. It differs from serviceAccountTokenResource only in
-// what the create response reports: the id and the name, plus the expiry the
-// connector resolved, since Grafana returns neither created nor last-used on
-// create.
-func issuedServiceAccountTokenResource(identityID *v2.ResourceId, tokenID int64, name string, expiresAt time.Time) (*v2.Resource, error) {
-	return rs.NewSecretResource(
-		name,
-		resourceTypeServiceAccountToken,
-		serviceAccountTokenHandle(identityID.GetResource(), tokenID),
-		[]rs.SecretTraitOption{
-			rs.WithSecretIdentityID(identityID),
-			rs.WithSecretType(v2.SecretTrait_CREDENTIAL_TYPE_STATIC_SECRET),
-			rs.WithSecretDetail(serviceAccountTokenDetail),
-			rs.WithSecretExpiresAt(expiresAt),
-		},
-		rs.WithParentResourceID(identityID),
-	)
 }

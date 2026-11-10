@@ -39,23 +39,12 @@ func (g *Grafana) ResourceSyncers(ctx context.Context) []connectorbuilder.Resour
 	// the condition C1 re-checks before it publishes an offering.
 	syncTokens := g.SyncServiceAccountTokens && g.willSyncResourceType(resourceTypeServiceAccountToken.GetId())
 
-	// A credential issuer with no revoke path is not an issuer: the SDK refuses
-	// to advertise an issuance option whose secret resource type has no
-	// ResourceDeleterV2, so the issuer and the token syncer are registered
-	// together or not at all.
-	serviceAccountSyncer := connectorbuilder.ResourceSyncerV2(
-		newServiceAccountBuilder(g.client, g.willSyncResourceType(resourceTypeOrg.GetId())),
-	)
-	if syncTokens {
-		serviceAccountSyncer = newCredentialServiceAccountBuilder(g.client, g.willSyncResourceType(resourceTypeOrg.GetId()))
-	}
-
 	syncers := []connectorbuilder.ResourceSyncerV2{
 		newOrgBuilder(g.client),
 		newUserBuilder(g.client),
 		newTeamBuilder(g.client, g.willSyncResourceType(resourceTypeRole.GetId())),
 		newRoleBuilder(g.client),
-		serviceAccountSyncer,
+		newServiceAccountBuilder(g.client, g.willSyncResourceType(resourceTypeOrg.GetId())),
 	}
 	if syncTokens {
 		syncers = append(syncers, newServiceAccountTokenBuilder(g.client))

@@ -186,8 +186,7 @@ type rolesListResponse []*Role
 type ServiceAccountToken struct {
 	ID int64 `json:"id"`
 	// Name is the operator-visible token name. The connector names every token
-	// it issues after the C1 request id, which is what makes a retried issuance
-	// detectable instead of duplicable.
+	// it issues c1-<UTC time>-<random>.
 	Name string `json:"name"`
 	// Created and LastUsedAt are RFC 3339 timestamps; Grafana omits or nulls
 	// LastUsedAt for a token that has never been used.
