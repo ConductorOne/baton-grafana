@@ -1,8 +1,8 @@
 ---
 title: "Set up a Grafana connector"
 og:title: "Set up a Grafana connector"
-description: "C1 provides identity governance and just-in-time provisioning for Grafana. Integrate your Grafana instance with C1 to run user access reviews (UARs) and enable just-in-time access requests."
-og:description: "C1 provides identity governance and just-in-time provisioning for Grafana. Integrate your Grafana instance with C1 to run user access reviews (UARs) and enable just-in-time access requests."
+description: "C1 provides identity governance and just-in-time provisioning for Grafana. Integrate your Grafana instance with C1 to run user access reviews (UARs), enable just-in-time access requests, and automatically provision and deprovision access."
+og:description: "C1 provides identity governance and just-in-time provisioning for Grafana. Integrate your Grafana instance with C1 to run user access reviews (UARs), enable just-in-time access requests, and automatically provision and deprovision access."
 sidebarTitle: "Grafana"
 ---
 
@@ -21,6 +21,10 @@ Team membership can be granted and revoked. Grafana RBAC roles that a team holds
 
 Service account tokens are synced only when you enable **Sync service account tokens** (see [Credential vending](#credential-vending)) — they are what C1 issues and revokes when it vends a Grafana credential.
 
+On self-hosted Grafana with more than one organization, the connector syncs teams and service accounts only from the organization currently selected for the Grafana account it signs in with. Organizations, organization role assignments (**Viewer**, **Editor**, and **Admin**), and accounts still sync from every organization on the instance, but teams and service accounts that belong to other organizations do not appear in C1.
+
+Accounts and service accounts whose organization role is **None** (**No basic role** in Grafana) still sync, but C1 shows no organization role for them: the connector models only the **Viewer**, **Editor**, and **Admin** roles. Access reviews of an organization's role entitlements do not include these members.
+
 [This connector syncs non-human identities](/product/admin/nhi) and displays them on the **Identities overview** dashboard.
 
 <Note>
@@ -33,8 +37,15 @@ The Grafana connector supports both **self-hosted Grafana** instances and **Graf
 
 The Grafana connector supports [automatic account provisioning and deprovisioning](/product/admin/account-provisioning).
 
-For self-hosted Grafana, when a new account is created by C1, the account's password is sent to a [vault](/product/admin/vaults).
-For Grafana Cloud, account creation is invite-based and no connector-generated password is returned.
+For self-hosted Grafana, C1 creates the user directly, and deprovisioning deletes the user from the instance.
+For Grafana Cloud, account creation is invite-based and no connector-generated password is returned. Deprovisioning removes the user from the organization; C1 does not delete the user's Grafana Cloud account.
+
+<Note>
+**Self-hosted Grafana: account creation needs a credential store**
+
+On self-hosted Grafana, every account the connector creates gets a password, which the connector returns to C1 to store. In the app's [account provisioning](/product/admin/account-provisioning) settings, set **Password storage** to **Save to credential store** and select a [vault](/product/admin/vaults). The connector does not support **Do not save password** for self-hosted Grafana.
+</Note>
+
 <Warning>
 **Grafana Cloud: enabling the basic login form is a prerequisite for creating brand-new users**
 
@@ -205,7 +216,7 @@ No built-in Grafana role grants one of these actions without the other: `fixed:r
 
 You will need:
 
-* Your Grafana Cloud instance URL (e.g., `https://your-org.grafana.net`)
+* Your Grafana Cloud instance URL, including the scheme (for example, `https://your-org.grafana.net`)
 * The service account token generated above
 
 **Done.** Next, move on to the connector configuration instructions.
@@ -216,11 +227,11 @@ For self-hosted Grafana, the connector authenticates using the username and pass
 You will need:
 
 * The username and password for a Grafana account with **admin-level permissions**
-* Your Grafana instance URL
+* Your Grafana instance URL, including the scheme (for example, `https://grafana.example.com`)
 
 On Grafana Enterprise that account also needs `teams:read` (`GET /api/teams/search`) and `teams.permissions:read` (team membership, from `GET /api/teams/{id}/members`) unconditionally, plus `roles:read` and `teams.roles:read` together when Role sync is enabled — the connector only fetches each team's RBAC roles in that case. Self-hosted reads users from the global users endpoint rather than `GET /api/org/users`, so `org.users:read` — required in Cloud mode for user sync — does not apply to self-hosted user sync here (it still applies to organization-membership grants below). See the permission table in the **Grafana Cloud** tab above for the full endpoint-by-endpoint mapping, and note that no built-in Grafana role grants `roles:read` without also granting `teams.roles:read` (or vice versa) — that's expected when Role sync is enabled; a custom role is only needed if you must diverge from that pairing. On OSS, leave Role sync disabled — the access-control API is not present, and the connector skips that step instead of failing.
 
-Service account sync is unconditional on both Cloud and self-hosted, so `serviceaccounts:read` (`GET /api/serviceaccounts/search`) is also required here, same as in the Cloud tab.
+Service account sync is unconditional on both Cloud and self-hosted, so `serviceaccounts:read` (`GET /api/serviceaccounts/search`) is also required here, same as in the Cloud tab. Your Grafana instance must serve `GET /api/serviceaccounts/search`. If that endpoint returns `404`, the sync currently completes without service accounts, and C1 treats every previously synced service account as removed. If it returns `403`, for example because `serviceaccounts:read` is missing, the sync fails.
 
 Beyond team, role, and service-account permissions, self-hosted org and user sync call instance-admin-scoped endpoints:
 
@@ -298,7 +309,7 @@ Click **Add**. The connector is created and its configuration page opens.
 Find the **Settings** area of the page and click **Edit**.
 </Step>
 <Step>
-Paste your Grafana instance URL into the **Instance URL** field.
+Paste your Grafana instance URL, including the scheme (for example, `https://`), into the **Instance URL** field.
 </Step>
 <Step>
 Enter your credentials based on your Grafana deployment type:
@@ -379,7 +390,8 @@ stringData:
   BATON_CLIENT_SECRET: <C1 client secret>
 
   # Grafana Cloud credentials
-  BATON_HOSTNAME: <Grafana Cloud instance URL>       # e.g. https://your-org.grafana.net
+  BATON_HOSTNAME: <Grafana Cloud instance URL>       # Include the scheme, for example https://your-org.grafana.net
+  BATON_AUTH_METHOD: api-key-flow-group              # Required for Grafana Cloud: the connector then expects BATON_API_TOKEN instead of a username and password
   BATON_API_TOKEN: <service account token>
 
   # Optional: Include if you want C1 to provision access using this connector
@@ -401,7 +413,7 @@ stringData:
   BATON_CLIENT_SECRET: <C1 client secret>
 
   # Self-hosted Grafana credentials
-  BATON_HOSTNAME: <Grafana instance URL>
+  BATON_HOSTNAME: <Grafana instance URL>             # Include the scheme, for example https://grafana.example.com
   BATON_USERNAME: <Grafana account username>
   BATON_PASSWORD: <Grafana account password>
 
