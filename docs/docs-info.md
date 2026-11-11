@@ -110,6 +110,7 @@ field group:
    | `--username`    | `BATON_USERNAME`    | self-hosted   | yes (basic-auth group)                                  |
    | `--password`    | `BATON_PASSWORD`    | self-hosted   | yes (basic-auth group)                                  |
    | `--api-token`   | `BATON_API_TOKEN`   | Grafana Cloud | yes (api-key group)                                     |
+   | `--sync-service-account-tokens` | `BATON_SYNC_SERVICE_ACCOUNT_TOKENS` | both | no; opt-in to token sync, issuance and revocation (see notes) |
 
 2. **For each credential:**
    - *How does a user create or look up the credential?*
@@ -179,8 +180,84 @@ API doc root: <https://grafana.com/docs/grafana/latest/developers/http_api/>
 | Operation               | Method + path                     | Doc                                                                                                                                         |
 | :---------------------- | :-------------------------------- | :------------------------------------------------------------------------------------------------------------------------------------------ |
 | Search service accounts | `GET /api/serviceaccounts/search` | [Service account HTTP API](https://grafana.com/docs/grafana/latest/developers/http_api/serviceaccount/#search-service-accounts-with-paging) |
+| List a service account's tokens | `GET /api/serviceaccounts/{id}/tokens` | [Service account HTTP API](https://grafana.com/docs/grafana/latest/developers/http_api/serviceaccount/#get-service-account-tokens) |
+| Create a token | `POST /api/serviceaccounts/{id}/tokens` | [Service account HTTP API](https://grafana.com/docs/grafana/latest/developers/http_api/serviceaccount/#create-service-account-tokens) |
+| Delete a token | `DELETE /api/serviceaccounts/{id}/tokens/{tokenId}` | [Service account HTTP API](https://grafana.com/docs/grafana/latest/developers/http_api/serviceaccount/#delete-service-account-tokens) |
+
+The three token routes stay on the legacy `/api` tree. Grafana 13 deprecates
+`/api` in favor of `/apis`, but the service-account token routes have no `/apis`
+equivalent yet and the legacy routes are not being disabled.
 
 ## Additional notes
+
+### Credential vending (service-account tokens)
+
+`--sync-service-account-tokens` (`BATON_SYNC_SERVICE_ACCOUNT_TOKENS`, default
+`false`) registers the `service_account_token` secret resource type, its
+`ResourceDeleterV2` revoke path and the `issue_service_account_token` issuer: one
+resource-scoped `ACTION_TYPE_RESOURCE_CREATE` action registered on that type with
+`actions.RegisterWithSecrets`. Without it the
+connector syncs neither tokens nor an issuer, because creating and
+deleting tokens needs `serviceaccounts:write` — a higher privilege than the
+`serviceaccounts:read` the rest of the connector uses.
+
+The type is `OptInRequired`, so it is excluded from C1's default sync selection.
+The issuer is registered only when the grant is set **and** the
+type is in the sync selection: C1 drops a descriptor whose secret resource type
+is not synced, so advertising it earlier would publish an offering nobody can
+request.
+
+Design notes:
+
+* The subject is an existing synced service account; the connector never creates
+  a service account for a request.
+* The issued token's revocation handle is `<service account id>.<token id>`,
+  because Grafana's delete is scoped to both and neither id is derivable from
+  the other. Both travel in the resource id rather than relying on the optional
+  `parentResourceID` hint.
+* The secret type is the service-account token; the subject is the Grafana
+  service account (`service_account_id`, a `ResourceIdField` allowing only the
+  `service_account` type). The one other argument, `seconds_to_live`, is an
+  admin-fixed offering value: required, at least 60. Grafana reads
+  `secondsToLive: 0` as "never expires", so the connector never defaults it and
+  never sends zero. C1 revokes at offering expiry by deleting the returned id, so
+  the Grafana lifetime is a backstop; set it no shorter than the offering.
+* The result is the Multipass `api_key_v2` secret (`application/vnd.multipass.api_key_v2+json`)
+  with `provider` `grafana`, `base_url` the configured instance URL, `key_id` the
+  Grafana token id, `header_name` `Authorization` and `expires_at` as a date.
+  `scopes` is never emitted: a token inherits its service account's permissions.
+  The Multipass types are a temporary local module under `local_vendor/` until
+  IGA-5320.
+* After the create the connector reads the token back through
+  `ListServiceAccountTokensFresh` (uncached — the SDK's HTTP client caches GET
+  responses for an hour) and builds the returned resource from it, so the issued
+  resource and the same token on its next sync are one resource, and
+  `SecretTrait.expires_at` is **the provider's own `expiration`**. It fails the
+  issuance, and deletes the token, when the provider reports no expiry or the
+  token is absent from the readback.
+* A cleanup that cannot remove a minted-but-unreturnable token is returned
+  alongside the rejection (`errors.Join`), not just logged: the credential is
+  then live and the connector holds its only handle. Cleanup is bounded by a
+  30-second timeout detached from the caller's context.
+* Token names are `c1-<UTC time>-<random>`, so a call never collides with
+  another and no duplicate guard is needed. A create whose response is lost after
+  Grafana committed it is reported as a failure, not retried and not removed: the
+  token, if it exists, carries the `c1-` name, so the next sync inventories it
+  and it can be revoked by id.
+* A `404` from the delete route means the token (or its service account) is
+  already gone, which the connector reports as a successful deletion. Grafana's
+  token store returns `ErrServiceAccountTokenNotFound` for a missing token and
+  the API renders it as 404.
+* Grafana documents no per-service-account token limit, so there is no provider
+  quota for the vending kit's `S-KEY-LIMIT` scenario to exercise.
+* **The token list has a hard per-response cap.** `ListTokens` applies a SQL
+  `LIMIT` of `maxRetrievedTokens` (1000) with no pagination
+  (`pkg/services/serviceaccounts/database/token_store.go`, ordered by token
+  name), so a response at the cap may be a prefix of the account's tokens. A
+  truncated list reported as complete would make C1 read the missing tokens as
+  deleted and drop their revocation handles, so the sync **fails closed** at the
+  cap with a message naming it. One below the cap syncs normally. This is a read
+  refusal, not a quota: the connector does not invent a token limit.
 
 ### Teams, RBAC roles, and service accounts
 

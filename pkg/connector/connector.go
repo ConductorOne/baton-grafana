@@ -20,17 +20,37 @@ var _ connectorbuilder.ConnectorBuilderV2 = (*Grafana)(nil)
 type Grafana struct {
 	client        *grafana.Client
 	connectorOpts *cli.ConnectorOpts
+	// SyncServiceAccountTokens is the operator's explicit grant to sync Grafana
+	// service-account tokens — which is also what registers the revoke path for
+	// credential issuance — and to issue them. It is deliberately not implied
+	// by anything else: listing a service account's tokens needs
+	// serviceaccounts:read, but creating and deleting them needs
+	// serviceaccounts:write, and an install must not acquire token creation or
+	// deletion merely by upgrading.
+	SyncServiceAccountTokens bool
 }
 
 // ResourceSyncers returns a list of syncers for different resource types.
 func (g *Grafana) ResourceSyncers(ctx context.Context) []connectorbuilder.ResourceSyncerV2 {
-	return []connectorbuilder.ResourceSyncerV2{
+	// The token type is OptInRequired, so C1's default sync selection excludes
+	// it. Registration is keyed on the operator's grant *and* on the type being
+	// in this sync's selection: the issuance capability is only advertised when
+	// the type that carries the credential is actually synced, which is exactly
+	// the condition C1 re-checks before it publishes an offering.
+	syncTokens := g.SyncServiceAccountTokens && g.willSyncResourceType(resourceTypeServiceAccountToken.GetId())
+
+	syncers := []connectorbuilder.ResourceSyncerV2{
 		newOrgBuilder(g.client),
 		newUserBuilder(g.client),
 		newTeamBuilder(g.client, g.willSyncResourceType(resourceTypeRole.GetId())),
 		newRoleBuilder(g.client),
 		newServiceAccountBuilder(g.client, g.willSyncResourceType(resourceTypeOrg.GetId())),
 	}
+	if syncTokens {
+		syncers = append(syncers, newServiceAccountTokenBuilder(g.client))
+	}
+
+	return syncers
 }
 
 // willSyncResourceType is true when the type is in this sync. Nil opts (the
@@ -128,7 +148,7 @@ func (g *Grafana) Validate(ctx context.Context) (annotations.Annotations, error)
 // New initializes a new instance of the Grafana connector.
 // When apiToken is non-empty the connector operates in Cloud mode (Bearer auth, current-org scope).
 // When apiToken is empty the connector operates in self-hosted mode (Basic auth, server-admin scope).
-func New(ctx context.Context, hostname, username, password, apiToken string, connectorOpts *cli.ConnectorOpts) (*Grafana, error) {
+func New(ctx context.Context, hostname, username, password, apiToken string, syncServiceAccountTokens bool, connectorOpts *cli.ConnectorOpts) (*Grafana, error) {
 	grafanaClient, err := grafana.NewClient(ctx, hostname, username, password, apiToken)
 	if err != nil {
 		l := ctxzap.Extract(ctx)
@@ -137,7 +157,8 @@ func New(ctx context.Context, hostname, username, password, apiToken string, con
 	}
 
 	return &Grafana{
-		client:        grafanaClient,
-		connectorOpts: connectorOpts,
+		client:                   grafanaClient,
+		connectorOpts:            connectorOpts,
+		SyncServiceAccountTokens: syncServiceAccountTokens,
 	}, nil
 }
