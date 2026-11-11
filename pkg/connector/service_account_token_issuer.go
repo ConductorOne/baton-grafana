@@ -19,8 +19,8 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/structpb"
 
+	"github.com/conductorone/baton-grafana/local_vendor/baton-multipass-sdk/pkg/multipass"
 	"github.com/conductorone/baton-grafana/pkg/grafana"
-	"github.com/conductorone/baton-multipass-sdk/pkg/multipass"
 )
 
 // The service-account token type carries one issuer: a resource-scoped

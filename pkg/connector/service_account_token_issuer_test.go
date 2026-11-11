@@ -21,8 +21,8 @@ import (
 	"github.com/conductorone/baton-sdk/pkg/actions"
 	"github.com/conductorone/baton-sdk/pkg/connectorbuilder"
 
+	"github.com/conductorone/baton-grafana/local_vendor/baton-multipass-sdk/pkg/multipass"
 	"github.com/conductorone/baton-grafana/pkg/grafana"
-	"github.com/conductorone/baton-multipass-sdk/pkg/multipass"
 )
 
 // issuerExpiry is the expiry the fake provider reports for a freshly minted token.
